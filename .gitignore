@@ -1,0 +1,77 @@
+# General
+*.swp
+*.swo
+*~
+*.bak
+*.backup
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editors/IDE
+.vscode/
+.idea/
+*.code-workspace
+.tags
+
+# Logs
+logs/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.build/
+build/
+dist/
+.eggs/
+*.egg-info/
+pip-wheel-metadata/
+
+# Python tooling caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.pytype/
+.cache/
+
+# Virtual environments and env files
+.venv/
+venv/
+env/
+ENV/
+.env
+.env.*
+.envrc
+.python-version
+
+# AWS SAM / Serverless artifacts
+.aws-sam/
+.sam-cache/
+.serverless/
+packaged.yaml
+# Ignore generated/backup CloudFormation templates
+template.yaml.backup
+*.template.packaged.yaml
+
+# Archives and bundles (build artifacts)
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.gz
+
+# Keys and certificates (generated locally, do not commit)
+*.pem
+*.pub
+*.key
+*.p12
+*.crt
+*.cer
+*.der

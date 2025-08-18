@@ -1,0 +1,598 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'WordPress Static Site Guardian - Protect static WordPress sites with CloudFront signed cookies, API Gateway, and Lambda functions'
+
+Metadata:
+  AWS::ServerlessRepo::Application:
+    Name: wordpress-static-site-guardian
+    Description: 'Enterprise-grade protection for static WordPress sites using CloudFront signed cookies, automated key management, and seamless authentication integration'
+    Author: 'WordPress Static Site Guardian'
+    SpdxLicenseId: MIT
+    LicenseUrl: LICENSE
+    ReadmeUrl: README.md
+    Labels: ['wordpress', 'cloudfront', 'static-site', 'authentication', 'security', 'signed-cookies']
+    HomePageUrl: https://github.com/your-repo/wordpress-static-site-guardian
+    SemanticVersion: 1.0.7
+    SourceCodeUrl: https://github.com/your-repo/wordpress-static-site-guardian
+
+Parameters:
+  DomainName:
+    Type: String
+    Description: 'Custom domain for CloudFront distribution (e.g., example.com)'
+    AllowedPattern: '^[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$'
+    ConstraintDescription: 'Must be a valid domain name'
+
+  ApiDomainName:
+    Type: String
+    Description: 'Custom domain for API Gateway (must be subdomain of CloudFront domain, e.g., api.example.com)'
+    AllowedPattern: '^[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$'
+    ConstraintDescription: 'Must be a valid subdomain of the main domain'
+
+  CertificateArn:
+    Type: String
+    Description: 'ARN of the SSL certificate in ACM (must be in us-east-1 region for CloudFront)'
+    AllowedPattern: '^arn:aws:acm:us-east-1:[0-9]{12}:certificate/[a-f0-9-]{36}$'
+    ConstraintDescription: 'Must be a valid ACM certificate ARN in us-east-1 region'
+
+  ProtectedPaths:
+    Type: CommaDelimitedList
+    Default: '/dashboard,/profile,/admin'
+    Description: 'List of paths to protect with signed cookies (comma-separated)'
+    ConstraintDescription: 'Comma-separated list of URL paths starting with /'
+
+  SigninPath:
+    Type: String
+    Default: '/signin'
+    Description: 'Path to redirect unauthenticated users for sign-in (e.g., /signin, /login, /auth)'
+    AllowedPattern: '^/[a-zA-Z0-9/_-]*$'
+    ConstraintDescription: 'Must be a valid URL path starting with /'
+
+  CookieExpirationDays:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    MaxValue: 365
+    Description: 'Cookie expiration in days (should match Cognito AppClient refresh token validity)'
+    ConstraintDescription: 'Must be between 1 and 365 days'
+
+  PublicKeyContent:
+    Type: String
+    Description: 'Base64 encoded RSA public key content (without BEGIN/END headers). Generate using the provided key generation script.'
+    MinLength: 100
+    ConstraintDescription: 'Must be a valid base64-encoded RSA public key'
+    NoEcho: false
+
+  KmsKeyId:
+    Type: String
+    Description: 'KMS Key ID containing the encrypted CloudFront private key for signing cookies. Generate using the provided key generation script.'
+    AllowedPattern: '^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$'
+    ConstraintDescription: 'Must be a valid KMS Key ID in UUID format'
+
+  EnableDetailedLogging:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: 'Enable detailed CloudWatch logging for troubleshooting'
+
+  S3BucketName:
+    Type: String
+    Default: ''
+    Description: 'Custom name for the S3 bucket hosting static files. Leave empty to auto-generate a unique name.'
+    AllowedPattern: '^$|^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$'
+    ConstraintDescription: 'Must be empty or a valid S3 bucket name (3-63 characters, lowercase letters, numbers, and hyphens only)'
+
+  NotFoundPagePath:
+    Type: String
+    Default: '/404'
+    Description: 'Path to the custom 404 error page in your S3 bucket'
+    AllowedPattern: '^/[a-zA-Z0-9/_.-]*\.html?$'
+    ConstraintDescription: 'Must be a valid HTML file path starting with /'
+
+  ForbiddenPagePath:
+    Type: String
+    Default: '/403'
+    Description: 'Path to the custom 403 error page in your S3 bucket'
+    AllowedPattern: '^/[a-zA-Z0-9/_.-]*\.html?$'
+    ConstraintDescription: 'Must be a valid HTML file path starting with /'
+
+  CreateDNSRecords:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: 'Create Route53 DNS records for the domains (requires Route53 hosted zone)'
+
+Conditions:
+  EnableLogging: !Equals [!Ref EnableDetailedLogging, 'true']
+  UseCustomBucketName: !Not [!Equals [!Ref S3BucketName, '']]
+  CreateDNS: !Equals [!Ref CreateDNSRecords, 'true']
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Runtime: python3.12
+    Environment:
+      Variables:
+        LOG_LEVEL: !If [EnableLogging, 'DEBUG', 'INFO']
+  Api:
+    Cors:
+      AllowMethods: "'GET,OPTIONS'"
+      AllowHeaders: "'Content-Type,Authorization'"
+      AllowOrigin: "'*'"
+      MaxAge: "'600'"
+    Auth:
+      DefaultAuthorizer: AWS_IAM
+    EndpointConfiguration: REGIONAL
+
+Resources:
+  # S3 Bucket for static site hosting
+  StaticSiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !If 
+        - UseCustomBucketName
+        - !Ref S3BucketName
+        - !Sub '${AWS::StackName}-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+
+  # CloudWatch Log Group for S3 access
+  S3AccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/s3/${AWS::StackName}-access-logs'
+      RetentionInDays: 30
+
+  # Lambda Function for CloudFront resource management
+  CloudFrontResourceManager:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-cloudfront-manager'
+      CodeUri: src/
+      Handler: cloudfront_manager.lambda_handler
+      Description: 'Manages CloudFront resources not supported by SAR'
+      Timeout: 300
+      Environment:
+        Variables:
+          STACK_NAME: !Ref AWS::StackName
+          PUBLIC_KEY_CONTENT: !Ref PublicKeyContent
+          PROTECTED_PATHS: !Join [',', !Ref ProtectedPaths]
+          SIGNIN_PATH: !Ref SigninPath
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*'
+            - Effect: Allow
+              Action:
+                - cloudfront:CreatePublicKey
+                - cloudfront:UpdatePublicKey
+                - cloudfront:DeletePublicKey
+                - cloudfront:GetPublicKey
+                - cloudfront:CreateKeyGroup
+                - cloudfront:UpdateKeyGroup
+                - cloudfront:DeleteKeyGroup
+                - cloudfront:GetKeyGroup
+                - cloudfront:CreateFunction
+                - cloudfront:UpdateFunction
+                - cloudfront:DeleteFunction
+                - cloudfront:GetFunction
+                - cloudfront:PublishFunction
+                - cloudfront:CreateOriginAccessControl
+                - cloudfront:UpdateOriginAccessControl
+                - cloudfront:DeleteOriginAccessControl
+                - cloudfront:GetOriginAccessControl
+                - cloudfront:CreateDistribution
+                - cloudfront:UpdateDistribution
+                - cloudfront:GetDistribution
+                - route53:ListHostedZones
+                - route53:GetHostedZone
+              Resource: '*'
+
+  # Custom Resource for CloudFront Public Key
+  CloudFrontPublicKey:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt CloudFrontResourceManager.Arn
+      ResourceType: 'PublicKey'
+      Name: !Sub '${AWS::StackName}-public-key'
+      PublicKeyContent: !Ref PublicKeyContent
+
+  # Custom Resource for CloudFront Key Group
+  CloudFrontKeyGroup:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt CloudFrontResourceManager.Arn
+      ResourceType: 'KeyGroup'
+      Name: !Sub '${AWS::StackName}-key-group'
+      PublicKeyId: !GetAtt CloudFrontPublicKey.PublicKeyId
+
+  # Custom Resource for Origin Access Control
+  OriginAccessControl:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt CloudFrontResourceManager.Arn
+      ResourceType: 'OriginAccessControl'
+      Name: !Sub '${AWS::StackName}-OAC'
+
+  # Custom Resource for CloudFront Function (Authentication)
+  ViewerRequestFunction:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt CloudFrontResourceManager.Arn
+      ResourceType: 'Function'
+      Name: !Sub '${AWS::StackName}-viewer-request'
+      ProtectedPaths: !Join [',', !Ref ProtectedPaths]
+      SigninPath: !Ref SigninPath
+
+  # Custom Resource for CloudFront Function (Path Rewriting)
+  PathRewriteFunction:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt CloudFrontResourceManager.Arn
+      ResourceType: 'PathRewriteFunction'
+      Name: !Sub '${AWS::StackName}-path-rewrite'
+      ProtectedPaths: !Join [',', !Ref ProtectedPaths]
+
+  # CloudFront Distribution (using standard CloudFormation)
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Aliases:
+          - !Ref DomainName
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt StaticSiteBucket.RegionalDomainName
+            S3OriginConfig: {}
+            OriginAccessControlId: !GetAtt OriginAccessControl.OriginAccessControlId
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled
+          OriginRequestPolicyId: 88a5eaf4-2fd4-4709-b370-b4c650ea3fcf  # CORS-S3Origin
+          Compress: true
+          FunctionAssociations:
+            - EventType: viewer-request
+              FunctionARN: !GetAtt ViewerRequestFunction.FunctionARN
+        CacheBehaviors:
+          - PathPattern: '/restricted*'
+            TargetOriginId: S3Origin
+            ViewerProtocolPolicy: redirect-to-https
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled
+            OriginRequestPolicyId: 88a5eaf4-2fd4-4709-b370-b4c650ea3fcf  # CORS-S3Origin
+            Compress: true
+            TrustedKeyGroups:
+              - !GetAtt CloudFrontKeyGroup.KeyGroupId
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt PathRewriteFunction.FunctionARN
+        CustomErrorResponses:
+          - ErrorCode: 404
+            ResponseCode: 404
+            ResponsePagePath: !Ref NotFoundPagePath
+            ErrorCachingMinTTL: 300
+          - ErrorCode: 403
+            ResponseCode: 403
+            ResponsePagePath: !Ref ForbiddenPagePath
+            ErrorCachingMinTTL: 300
+        Enabled: true
+        DefaultRootObject: index.html
+        HttpVersion: http2
+        PriceClass: PriceClass_100
+        ViewerCertificate:
+          AcmCertificateArn: !Ref CertificateArn
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+        Logging: !If
+          - EnableLogging
+          - Bucket: !GetAtt StaticSiteBucket.DomainName
+            Prefix: 'cloudfront-logs/'
+            IncludeCookies: true
+          - !Ref AWS::NoValue
+
+  # S3 Bucket Policy to allow CloudFront access
+  StaticSiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref StaticSiteBucket
+      PolicyDocument:
+        Statement:
+          - Sid: AllowCloudFrontServicePrincipalGetObject
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub 'arn:aws:s3:::${StaticSiteBucket}/*'
+            Condition:
+              StringEquals:
+                'AWS:SourceArn': !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}'
+          - Sid: AllowCloudFrontServicePrincipalListBucket
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:ListBucket
+            Resource: !Sub 'arn:aws:s3:::${StaticSiteBucket}'
+            Condition:
+              StringEquals:
+                'AWS:SourceArn': !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}'
+          - Sid: AllowCloudFrontLogsWrite
+            Effect: Allow
+            Principal:
+              Service: delivery.logs.amazonaws.com
+            Action:
+              - s3:PutObject
+            Resource: !Sub 'arn:aws:s3:::${StaticSiteBucket}/cloudfront-logs/*'
+            Condition:
+              StringEquals:
+                's3:x-amz-acl': 'bucket-owner-full-control'
+          - Sid: AllowCloudFrontLogsGetAcl
+            Effect: Allow
+            Principal:
+              Service: delivery.logs.amazonaws.com
+            Action:
+              - s3:GetBucketAcl
+            Resource: !Sub 'arn:aws:s3:::${StaticSiteBucket}'
+
+  # Lambda Function for issuing signed cookies
+  CookieSigningFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-cookie-signing'
+      CodeUri: src/
+      Handler: lambda_function.lambda_handler
+      Description: 'Issues and manages CloudFront signed cookies for protected content access'
+      Environment:
+        Variables:
+          CLOUDFRONT_DOMAIN: !GetAtt CloudFrontDistribution.DomainName
+          KEY_PAIR_ID: !GetAtt CloudFrontPublicKey.PublicKeyId
+          COOKIE_EXPIRATION_DAYS: !Ref CookieExpirationDays
+          PROTECTED_PATHS: !Join [',', !Ref ProtectedPaths]
+          KMS_KEY_ID: !Ref KmsKeyId
+          AWS_REGION_NAME: !Ref AWS::Region
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*'
+            - Effect: Allow
+              Action:
+                - kms:Decrypt
+                - kms:DescribeKey
+              Resource: !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/${KmsKeyId}'
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - ssm:GetParameters
+              Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudfront/private-key/*'
+      Events:
+        CookieApi:
+          Type: Api
+          Properties:
+            Path: /issue-cookie
+            Method: GET
+
+  # CloudWatch Log Group for API Gateway
+  ApiGatewayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: EnableLogging
+    Properties:
+      LogGroupName: !Sub '/aws/apigateway/${AWS::StackName}'
+      RetentionInDays: 30
+
+  # API Gateway Custom Domain
+  ApiGatewayDomainName:
+    Type: AWS::ApiGateway::DomainName
+    Properties:
+      DomainName: !Ref ApiDomainName
+      RegionalCertificateArn: !Ref CertificateArn
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      SecurityPolicy: TLS_1_2
+
+  # API Gateway Base Path Mapping
+  ApiGatewayBasePathMapping:
+    Type: AWS::ApiGateway::BasePathMapping
+    Properties:
+      DomainName: !Ref ApiGatewayDomainName
+      RestApiId: !Ref ServerlessRestApi
+      Stage: Prod
+
+  # Route53 Hosted Zone Lookup
+  HostedZoneLookup:
+    Type: AWS::CloudFormation::CustomResource
+    Condition: CreateDNS
+    Properties:
+      ServiceToken: !GetAtt CloudFrontResourceManager.Arn
+      ResourceType: 'HostedZoneLookup'
+      DomainName: !Ref DomainName
+
+  # Route53 DNS Records
+  ApiDNSRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: CreateDNS
+    Properties:
+      HostedZoneId: !GetAtt HostedZoneLookup.HostedZoneId
+      Name: !Ref ApiDomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt ApiGatewayDomainName.RegionalDomainName
+        HostedZoneId: !GetAtt ApiGatewayDomainName.RegionalHostedZoneId
+
+  WWWDNSRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: CreateDNS
+    Properties:
+      HostedZoneId: !GetAtt HostedZoneLookup.HostedZoneId
+      Name: !Sub 'www.${DomainName}'
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt CloudFrontDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2  # CloudFront hosted zone ID
+
+  ApexDNSRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: CreateDNS
+    Properties:
+      HostedZoneId: !GetAtt HostedZoneLookup.HostedZoneId
+      Name: !Ref DomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt CloudFrontDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2  # CloudFront hosted zone ID
+
+  # CloudWatch Dashboard
+  MonitoringDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Condition: EnableLogging
+    Properties:
+      DashboardName: !Sub '${AWS::StackName}-monitoring'
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/Lambda", "Invocations", "FunctionName", "${CookieSigningFunction}" ],
+                  [ ".", "Errors", ".", "." ],
+                  [ ".", "Duration", ".", "." ]
+                ],
+                "period": 300,
+                "stat": "Sum",
+                "region": "${AWS::Region}",
+                "title": "Lambda Function Metrics"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/ApiGateway", "Count", "ApiName", "${AWS::StackName}" ],
+                  [ ".", "4XXError", ".", "." ],
+                  [ ".", "5XXError", ".", "." ]
+                ],
+                "period": 300,
+                "stat": "Sum",
+                "region": "${AWS::Region}",
+                "title": "API Gateway Metrics"
+              }
+            }
+          ]
+        }
+
+Outputs:
+  S3BucketName:
+    Description: 'S3 Bucket name for static site hosting'
+    Value: !Ref StaticSiteBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-S3BucketName'
+
+  S3BucketUrl:
+    Description: 'S3 Bucket URL for static site hosting'
+    Value: !Sub 'https://${StaticSiteBucket}.s3.${AWS::Region}.amazonaws.com'
+    Export:
+      Name: !Sub '${AWS::StackName}-S3BucketUrl'
+
+  CloudFrontDistributionId:
+    Description: 'CloudFront Distribution ID'
+    Value: !Ref CloudFrontDistribution
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudFrontDistributionId'
+
+  CloudFrontDistributionDomain:
+    Description: 'CloudFront Distribution Domain Name'
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudFrontDomain'
+
+  ApiGatewayId:
+    Description: 'API Gateway ID'
+    Value: !Ref ServerlessRestApi
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiGatewayId'
+
+  ApiGatewayInvokeUrl:
+    Description: 'API Gateway Invoke URL for cookie issuance'
+    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/issue-cookie'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiGatewayUrl'
+
+  LambdaFunctionArn:
+    Description: 'Lambda Function ARN for cookie signing'
+    Value: !GetAtt CookieSigningFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-LambdaArn'
+
+  CloudFrontKeyGroupId:
+    Description: 'CloudFront Key Group ID for signed cookies'
+    Value: !GetAtt CloudFrontKeyGroup.KeyGroupId
+    Export:
+      Name: !Sub '${AWS::StackName}-KeyGroupId'
+
+  ApiGatewayRegionalDomainName:
+    Description: 'API Gateway Regional Domain Name'
+    Value: !GetAtt ApiGatewayDomainName.RegionalDomainName
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiGatewayRegionalDomain'
+
+  ApiGatewayRegionalHostedZoneId:
+    Description: 'API Gateway Regional Hosted Zone ID'
+    Value: !GetAtt ApiGatewayDomainName.RegionalHostedZoneId
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiGatewayHostedZoneId'
+
+  Route53HostedZoneId:
+    Condition: CreateDNS
+    Description: 'Route53 Hosted Zone ID for the domain'
+    Value: !GetAtt HostedZoneLookup.HostedZoneId
+    Export:
+      Name: !Sub '${AWS::StackName}-HostedZoneId'
+
+  SetupInstructions:
+    Description: 'Next steps to complete the setup'
+    Value: !Sub |
+      1. Upload your static WordPress files to S3 bucket: ${StaticSiteBucket}
+      2. Include custom error pages: ${NotFoundPagePath} and ${ForbiddenPagePath}
+      3. DNS Configuration: Check CreateDNSRecords parameter (${CreateDNSRecords})
+      4. Test cookie issuance via custom domain: https://${ApiDomainName}/issue-cookie
+      5. Verify protected paths redirect unauthenticated users to ${SigninPath}
+      6. Test error pages by accessing non-existent URLs
+      
+      S3 Bucket: ${StaticSiteBucket}
+      CloudFront Domain: ${CloudFrontDistribution.DomainName}
+      API Gateway Domain: ${ApiGatewayDomainName.RegionalDomainName}
+
+  MonitoringDashboard:
+    Condition: EnableLogging
+    Description: 'CloudWatch Dashboard for monitoring'
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${AWS::StackName}-monitoring'
