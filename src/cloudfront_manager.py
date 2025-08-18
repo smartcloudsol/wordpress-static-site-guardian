@@ -439,6 +439,12 @@ def update_distribution(props):
             logger.info(f"Origins type: {type(origins_raw)}")
             if origins_raw:
                 logger.info(f"Origins content (first 500 chars): {str(origins_raw)[:500]}")
+            
+            # Check CacheBehaviors structure specifically
+            cache_behaviors_raw = config.get('CacheBehaviors')
+            logger.info(f"CacheBehaviors type: {type(cache_behaviors_raw)}")
+            if cache_behaviors_raw:
+                logger.info(f"CacheBehaviors content (first 500 chars): {str(cache_behaviors_raw)[:500]}")
         except Exception as debug_error:
             logger.error(f"Error debugging config structure: {debug_error}")
         
@@ -450,12 +456,14 @@ def update_distribution(props):
         
         # Log current origins for debugging
         try:
-            current_origins = config.get('Origins', [])
-            if not isinstance(current_origins, list):
-                logger.error(f"Origins is not a list, type: {type(current_origins)}, value: {str(current_origins)[:200]}")
+            origins_structure = config.get('Origins', {})
+            if isinstance(origins_structure, dict) and 'Items' in origins_structure:
+                current_origins = origins_structure['Items']
+                logger.info(f"Current origins count: {origins_structure.get('Quantity', len(current_origins))}")
+            else:
+                logger.error(f"Origins structure unexpected: {type(origins_structure)}")
                 current_origins = []
             
-            logger.info(f"Current origins count: {len(current_origins)}")
             for i, origin in enumerate(current_origins):
                 try:
                     if isinstance(origin, dict):
@@ -479,16 +487,21 @@ def update_distribution(props):
         # Safely check for existing self-origin
         has_self_origin = False
         try:
-            origins_list = config.get('Origins', [])
-            if isinstance(origins_list, list):
-                has_self_origin = any(
-                    origin.get('Id') == self_origin_id 
-                    for origin in origins_list
-                    if isinstance(origin, dict) and 'Id' in origin
-                )
-                logger.info(f"Self-origin check completed: has_self_origin={has_self_origin}")
+            origins_structure = config.get('Origins', {})
+            if isinstance(origins_structure, dict) and 'Items' in origins_structure:
+                origins_items = origins_structure['Items']
+                if isinstance(origins_items, list):
+                    has_self_origin = any(
+                        origin.get('Id') == self_origin_id 
+                        for origin in origins_items
+                        if isinstance(origin, dict) and 'Id' in origin
+                    )
+                    logger.info(f"Self-origin check completed: has_self_origin={has_self_origin}")
+                else:
+                    logger.error(f"Origins Items is not a list: {type(origins_items)}")
+                    has_self_origin = False
             else:
-                logger.error(f"Origins is not a list: {type(origins_list)}")
+                logger.error(f"Origins structure invalid: {type(origins_structure)}")
                 has_self_origin = False
         except Exception as e:
             logger.error(f"Error checking existing origins: {e}", exc_info=True)
@@ -496,18 +509,26 @@ def update_distribution(props):
         
         if not has_self_origin:
             try:
-                # Ensure Origins is a list
+                # Ensure Origins structure exists and is correct
                 if 'Origins' not in config:
-                    logger.warning("Origins key not found in config, creating new Origins list")
-                    config['Origins'] = []
-                elif not isinstance(config['Origins'], list):
-                    logger.error(f"Origins is not a list (type: {type(config['Origins'])}), replacing with empty list")
-                    config['Origins'] = []
+                    logger.warning("Origins key not found in config, creating new Origins structure")
+                    config['Origins'] = {'Quantity': 0, 'Items': []}
+                elif not isinstance(config['Origins'], dict):
+                    logger.error(f"Origins is not a dict (type: {type(config['Origins'])}), replacing with new structure")
+                    config['Origins'] = {'Quantity': 0, 'Items': []}
+                elif 'Items' not in config['Origins']:
+                    logger.warning("Origins missing Items, adding Items list")
+                    config['Origins']['Items'] = []
+                elif not isinstance(config['Origins']['Items'], list):
+                    logger.error(f"Origins Items is not a list (type: {type(config['Origins']['Items'])}), replacing")
+                    config['Origins']['Items'] = []
                 
                 logger.info(f"Adding self-origin with ID '{self_origin_id}' and domain '{domain_name}'")
                 new_origin = {
                     'Id': self_origin_id,
                     'DomainName': domain_name,
+                    'OriginPath': '',
+                    'CustomHeaders': {'Quantity': 0},
                     'CustomOriginConfig': {
                         'HTTPPort': 443,
                         'HTTPSPort': 443,
@@ -515,10 +536,17 @@ def update_distribution(props):
                         'OriginSSLProtocols': {
                             'Quantity': 1,
                             'Items': ['TLSv1.2']
-                        }
-                    }
+                        },
+                        'OriginReadTimeout': 30,
+                        'OriginKeepaliveTimeout': 5
+                    },
+                    'ConnectionAttempts': 3,
+                    'ConnectionTimeout': 10,
+                    'OriginShield': {'Enabled': False}
                 }
-                config['Origins'].append(new_origin)
+                
+                config['Origins']['Items'].append(new_origin)
+                config['Origins']['Quantity'] = len(config['Origins']['Items'])
                 changes_made = True
                 logger.info("Successfully added self-origin")
             except Exception as origin_add_error:
@@ -528,16 +556,35 @@ def update_distribution(props):
             logger.info(f"Self-origin '{self_origin_id}' already exists")
         
         # Add cache behaviors for each protected path
-        cache_behaviors = config.get('CacheBehaviors', [])
+        cache_behaviors_structure = config.get('CacheBehaviors', {'Quantity': 0, 'Items': []})
+        
+        # Handle CacheBehaviors structure (similar to Origins)
+        if isinstance(cache_behaviors_structure, dict) and 'Items' in cache_behaviors_structure:
+            cache_behaviors = cache_behaviors_structure['Items']
+            logger.info(f"Cache behaviors count: {cache_behaviors_structure.get('Quantity', len(cache_behaviors))}")
+        elif isinstance(cache_behaviors_structure, list):
+            # Fallback for older format
+            cache_behaviors = cache_behaviors_structure
+            logger.info(f"Cache behaviors count (legacy format): {len(cache_behaviors)}")
+        else:
+            logger.warning(f"CacheBehaviors unexpected type: {type(cache_behaviors_structure)}, using empty list")
+            cache_behaviors = []
+            logger.info("Cache behaviors count: 0")
         
         # Safely extract existing patterns
         existing_patterns = set()
         try:
-            for behavior in cache_behaviors:
-                if isinstance(behavior, dict) and 'PathPattern' in behavior:
-                    existing_patterns.add(behavior['PathPattern'])
+            for i, behavior in enumerate(cache_behaviors):
+                try:
+                    if isinstance(behavior, dict) and 'PathPattern' in behavior:
+                        existing_patterns.add(behavior['PathPattern'])
+                        logger.debug(f"Cache behavior {i}: PathPattern={behavior['PathPattern']}")
+                    else:
+                        logger.warning(f"Cache behavior {i}: Unexpected type {type(behavior)} or missing PathPattern")
+                except Exception as behavior_error:
+                    logger.error(f"Error processing cache behavior {i}: {behavior_error}")
         except Exception as e:
-            logger.warning(f"Error extracting existing cache behavior patterns: {e}")
+            logger.error(f"Error extracting existing cache behavior patterns: {e}")
             existing_patterns = set()
         
         logger.info(f"Existing cache behavior patterns: {existing_patterns}")
@@ -581,10 +628,35 @@ def update_distribution(props):
         
         # Update cache behaviors if we have new ones
         if new_behaviors:
-            cache_behaviors.extend(new_behaviors)
-            config['CacheBehaviors'] = cache_behaviors
-            changes_made = True
-            logger.info(f"Added {len(new_behaviors)} new cache behaviors")
+            try:
+                # Ensure cache_behaviors is still a list before extending
+                if not isinstance(cache_behaviors, list):
+                    logger.warning(f"cache_behaviors became non-list (type: {type(cache_behaviors)}), reinitializing")
+                    cache_behaviors = []
+                
+                cache_behaviors.extend(new_behaviors)
+                
+                # Update the config with proper CloudFront structure
+                config['CacheBehaviors'] = {
+                    'Quantity': len(cache_behaviors),
+                    'Items': cache_behaviors
+                }
+                changes_made = True
+                logger.info(f"Added {len(new_behaviors)} new cache behaviors")
+            except Exception as extend_error:
+                logger.error(f"Error extending cache behaviors: {extend_error}")
+                # Try alternative approach
+                try:
+                    combined_behaviors = list(cache_behaviors) + new_behaviors
+                    config['CacheBehaviors'] = {
+                        'Quantity': len(combined_behaviors),
+                        'Items': combined_behaviors
+                    }
+                    changes_made = True
+                    logger.info(f"Added {len(new_behaviors)} new cache behaviors (alternative method)")
+                except Exception as alt_error:
+                    logger.error(f"Alternative cache behavior update also failed: {alt_error}")
+                    # Continue without adding cache behaviors
         
         # Only update if we made changes
         if changes_made or not has_self_origin:
