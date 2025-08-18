@@ -613,6 +613,7 @@ def update_distribution(props):
                         'Items': ['GET', 'HEAD']
                     }
                 },
+                'SmoothStreaming': False,
                 'CachePolicyId': '4cc15a8a-d715-48a4-82b8-cc0b614638fe',  # UseOriginCacheControlHeaders-QueryStrings
                 'Compress': True,
                 'FunctionAssociations': {
