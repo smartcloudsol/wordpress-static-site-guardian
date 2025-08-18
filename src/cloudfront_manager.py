@@ -533,7 +533,7 @@ def update_distribution(props):
                         'HTTPPort': 443,
                         'HTTPSPort': 443,
                         'OriginProtocolPolicy': 'https-only',
-                        'OriginSSLProtocols': {
+                        'OriginSslProtocols': {
                             'Quantity': 1,
                             'Items': ['TLSv1.2']
                         },
