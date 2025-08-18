@@ -24,6 +24,9 @@ def lambda_handler(event, context):
     """
     
     try:
+        # Get environment variables
+        domain_name = os.environ['DOMAIN_NAME']
+
         # Extract action from query parameters or body
         query_params = event.get('queryStringParameters') or {}
         action = query_params.get('action', 'signin')
@@ -41,8 +44,9 @@ def lambda_handler(event, context):
             'statusCode': 200,
             'headers': {
                 'Content-Type': 'application/json',
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+                'Access-Control-Allow-Credentials': 'true',
+                'Access-Control-Allow-Origin': f'https://{domain_name}',
+                'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Amz-Security-Token',
                 'Access-Control-Allow-Methods': 'GET,OPTIONS'
             },
             'multiValueHeaders': {
@@ -98,28 +102,22 @@ def create_signed_cookies():
     
     try:
         # Get environment variables
-        cloudfront_domain = os.environ['CLOUDFRONT_DOMAIN']
+        domain_name = os.environ['DOMAIN_NAME']
         key_pair_id = os.environ['KEY_PAIR_ID']
         expiration_days = int(os.environ['COOKIE_EXPIRATION_DAYS'])
         protected_paths = [path.strip() for path in os.environ['PROTECTED_PATHS'].split(',')]
         
-        logger.info(f"Creating signed cookies for domain: {cloudfront_domain}")
+        logger.info(f"Creating signed cookies for domain: {domain_name}")
         logger.debug(f"Protected paths: {protected_paths}")
         
         # Calculate expiration time
         expiration_time = datetime.datetime.utcnow() + datetime.timedelta(days=expiration_days)
         expiration_timestamp = int(expiration_time.timestamp())
         
-        # Create a single policy for all protected paths
-        resources = []
-        for i, path in enumerate(protected_paths):
-            resource_url = f"https://{cloudfront_domain}/restricted-{i}/*"
-            resources.append(resource_url)
-        
         # Create comprehensive policy
         policy = {
             "Statement": [{
-                "Resource": resources,
+                "Resource": f"https://{domain_name}/restricted*",
                 "Condition": {
                     "DateLessThan": {
                         "AWS:EpochTime": expiration_timestamp
@@ -139,7 +137,7 @@ def create_signed_cookies():
         signature = sign_policy(policy_json)
         
         # Create cookies with proper attributes
-        cookie_domain = cloudfront_domain
+        cookie_domain = domain_name
         if not cookie_domain.startswith('.'):
             cookie_domain = f".{cookie_domain}"
         
@@ -223,8 +221,8 @@ def create_expired_cookies():
     """Create expired cookies to sign out user"""
     
     try:
-        cloudfront_domain = os.environ['CLOUDFRONT_DOMAIN']
-        cookie_domain = cloudfront_domain
+        domain_name = os.environ['DOMAIN_NAME']
+        cookie_domain = domain_name
         if not cookie_domain.startswith('.'):
             cookie_domain = f".{cookie_domain}"
         

@@ -32,11 +32,11 @@ CERTIFICATE_ARN=""
 KMS_KEY_ID=""
 PUBLIC_KEY_CONTENT=""
 PROTECTED_PATHS="/dashboard,/profile,/admin"
-SIGNIN_PATH="/signin"
+SIGNIN_PAGE_PATH="/signin"
 COOKIE_EXPIRATION_DAYS=30
 S3_BUCKET_NAME=""
-NOT_FOUND_PAGE_PATH="/404.html"
-FORBIDDEN_PAGE_PATH="/403.html"
+NOT_FOUND_PAGE_PATH="/404"
+FORBIDDEN_PAGE_PATH="/403"
 CREATE_DNS_RECORDS="true"
 REGION="us-east-1"
 APPLICATION_ID="arn:aws:serverlessrepo:us-east-1:123456789012:applications/wordpress-static-site-guardian"
@@ -62,8 +62,8 @@ OPTIONAL OPTIONS:
     -i, --signin-path PATH               Path for sign-in page (default: /signin)
     -e, --expiration-days DAYS           Cookie expiration in days (default: 30)
     -b, --s3-bucket-name NAME            Custom S3 bucket name (optional, auto-generated if not provided)
-    --not-found-page PATH                Custom 404 error page path (default: /404.html)
-    --forbidden-page PATH                Custom 403 error page path (default: /403.html)
+    --not-found-page PATH                Custom 404 error page path (default: /404)
+    --forbidden-page PATH                Custom 403 error page path (default: /403)
     --no-dns-records                     Skip creating Route53 DNS records (default: create records)
     -l, --enable-logging                 Enable detailed CloudWatch logging
     -r, --region REGION                  AWS region (default: us-east-1)
@@ -133,7 +133,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -i|--signin-path)
-            SIGNIN_PATH="$2"
+            SIGNIN_PAGE_PATH="$2"
             shift 2
             ;;
         -e|--expiration-days)
@@ -218,7 +218,7 @@ echo "  Certificate ARN: $CERTIFICATE_ARN"
 echo "  KMS Key ID: $KMS_KEY_ID"
 echo "  Public Key Length: ${#PUBLIC_KEY_CONTENT} characters"
 echo "  Protected Paths: $PROTECTED_PATHS"
-echo "  Signin Path: $SIGNIN_PATH"
+echo "  Signin Path: $SIGNIN_PAGE_PATH"
 echo "  Cookie Expiration: $COOKIE_EXPIRATION_DAYS days"
 echo "  Enable Logging: $ENABLE_LOGGING"
 echo "  Region: $REGION"
@@ -246,7 +246,7 @@ aws serverlessrepo create-cloud-formation-change-set \
         ParameterKey=KmsKeyId,ParameterValue="$KMS_KEY_ID" \
         ParameterKey=PublicKeyContent,ParameterValue="$PUBLIC_KEY_CONTENT" \
         ParameterKey=ProtectedPaths,ParameterValue="$PROTECTED_PATHS" \
-        ParameterKey=SigninPath,ParameterValue="$SIGNIN_PATH" \
+        ParameterKey=SigninPagePath,ParameterValue="$SIGNIN_PAGE_PATH" \
         ParameterKey=CookieExpirationDays,ParameterValue="$COOKIE_EXPIRATION_DAYS" \
         ParameterKey=S3BucketName,ParameterValue="$S3_BUCKET_NAME" \
         ParameterKey=NotFoundPagePath,ParameterValue="$NOT_FOUND_PAGE_PATH" \

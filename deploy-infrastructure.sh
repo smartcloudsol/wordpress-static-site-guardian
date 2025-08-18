@@ -17,7 +17,7 @@ DOMAIN_NAME=""
 API_DOMAIN_NAME=""
 CERTIFICATE_ARN=""
 PROTECTED_PATHS="/dashboard,/profile,/admin"
-SIGNIN_PATH="/signin"
+SIGNIN_PAGE_PATH="/signin"
 COGNITO_REFRESH_TOKEN_VALIDITY=30
 REGION="us-east-1"
 KMS_KEY_ID=""
@@ -101,7 +101,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -i|--signin-path)
-            SIGNIN_PATH="$2"
+            SIGNIN_PAGE_PATH="$2"
             shift 2
             ;;
         -t|--token-validity)
@@ -162,7 +162,7 @@ echo "  Certificate ARN: $CERTIFICATE_ARN"
 echo "  KMS Key ID: $KMS_KEY_ID"
 echo "  Public Key Length: ${#PUBLIC_KEY_CONTENT} characters"
 echo "  Protected Paths: $PROTECTED_PATHS"
-echo "  Signin Path: $SIGNIN_PATH"
+echo "  Signin Path: $SIGNIN_PAGE_PATH"
 echo "  Token Validity: $COGNITO_REFRESH_TOKEN_VALIDITY days"
 echo "  Region: $REGION"
 echo
@@ -204,7 +204,7 @@ aws cloudformation deploy \
         CertificateArn="$CERTIFICATE_ARN" \
         KmsKeyId="$KMS_KEY_ID" \
         PublicKeyContent="$PUBLIC_KEY_CONTENT" \
-        SigninPath="$SIGNIN_PATH" \
+        SigninPagePath="$SIGNIN_PAGE_PATH" \
     --capabilities CAPABILITY_NAMED_IAM \
     --region "$REGION"
 

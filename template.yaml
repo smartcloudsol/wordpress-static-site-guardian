@@ -11,9 +11,9 @@ Metadata:
     LicenseUrl: LICENSE
     ReadmeUrl: README.md
     Labels: ['wordpress', 'cloudfront', 'static-site', 'authentication', 'security', 'signed-cookies']
-    HomePageUrl: https://github.com/your-repo/wordpress-static-site-guardian
-    SemanticVersion: 1.0.7
-    SourceCodeUrl: https://github.com/your-repo/wordpress-static-site-guardian
+    HomePageUrl: https://wpsuite.io
+    SemanticVersion: 1.0.10
+    SourceCodeUrl: https://github.com/smartcloudsol/wordpress-static-site-guardian
 
 Parameters:
   DomainName:
@@ -40,7 +40,7 @@ Parameters:
     Description: 'List of paths to protect with signed cookies (comma-separated)'
     ConstraintDescription: 'Comma-separated list of URL paths starting with /'
 
-  SigninPath:
+  SigninPagePath:
     Type: String
     Default: '/signin'
     Description: 'Path to redirect unauthenticated users for sign-in (e.g., /signin, /login, /auth)'
@@ -85,14 +85,14 @@ Parameters:
     Type: String
     Default: '/404'
     Description: 'Path to the custom 404 error page in your S3 bucket'
-    AllowedPattern: '^/[a-zA-Z0-9/_.-]*\.html?$'
+    AllowedPattern: '^/[a-zA-Z0-9/_.-]*$'
     ConstraintDescription: 'Must be a valid HTML file path starting with /'
 
   ForbiddenPagePath:
     Type: String
     Default: '/403'
     Description: 'Path to the custom 403 error page in your S3 bucket'
-    AllowedPattern: '^/[a-zA-Z0-9/_.-]*\.html?$'
+    AllowedPattern: '^/[a-zA-Z0-9/_.-]*$'
     ConstraintDescription: 'Must be a valid HTML file path starting with /'
 
   CreateDNSRecords:
@@ -117,9 +117,8 @@ Globals:
   Api:
     Cors:
       AllowMethods: "'GET,OPTIONS'"
-      AllowHeaders: "'Content-Type,Authorization'"
+      AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Amz-Security-Token'"
       AllowOrigin: "'*'"
-      MaxAge: "'600'"
     Auth:
       DefaultAuthorizer: AWS_IAM
     EndpointConfiguration: REGIONAL
@@ -148,13 +147,6 @@ Resources:
       VersioningConfiguration:
         Status: Enabled
 
-  # CloudWatch Log Group for S3 access
-  S3AccessLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub '/aws/s3/${AWS::StackName}-access-logs'
-      RetentionInDays: 30
-
   # Lambda Function for CloudFront resource management
   CloudFrontResourceManager:
     Type: AWS::Serverless::Function
@@ -169,7 +161,7 @@ Resources:
           STACK_NAME: !Ref AWS::StackName
           PUBLIC_KEY_CONTENT: !Ref PublicKeyContent
           PROTECTED_PATHS: !Join [',', !Ref ProtectedPaths]
-          SIGNIN_PATH: !Ref SigninPath
+          SIGNIN_PAGE_PATH: !Ref SigninPagePath
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -239,7 +231,7 @@ Resources:
       ResourceType: 'Function'
       Name: !Sub '${AWS::StackName}-viewer-request'
       ProtectedPaths: !Join [',', !Ref ProtectedPaths]
-      SigninPath: !Ref SigninPath
+      SigninPagePath: !Ref SigninPagePath
 
   # Custom Resource for CloudFront Function (Path Rewriting)
   PathRewriteFunction:
@@ -360,7 +352,7 @@ Resources:
       Description: 'Issues and manages CloudFront signed cookies for protected content access'
       Environment:
         Variables:
-          CLOUDFRONT_DOMAIN: !GetAtt CloudFrontDistribution.DomainName
+          DOMAIN_NAME: !Ref DomainName
           KEY_PAIR_ID: !GetAtt CloudFrontPublicKey.PublicKeyId
           COOKIE_EXPIRATION_DAYS: !Ref CookieExpirationDays
           PROTECTED_PATHS: !Join [',', !Ref ProtectedPaths]
@@ -392,14 +384,6 @@ Resources:
             Path: /issue-cookie
             Method: GET
 
-  # CloudWatch Log Group for API Gateway
-  ApiGatewayLogGroup:
-    Type: AWS::Logs::LogGroup
-    Condition: EnableLogging
-    Properties:
-      LogGroupName: !Sub '/aws/apigateway/${AWS::StackName}'
-      RetentionInDays: 30
-
   # API Gateway Custom Domain
   ApiGatewayDomainName:
     Type: AWS::ApiGateway::DomainName
@@ -417,7 +401,7 @@ Resources:
     Properties:
       DomainName: !Ref ApiGatewayDomainName
       RestApiId: !Ref ServerlessRestApi
-      Stage: Prod
+      Stage: !Ref ServerlessRestApiProdStage
 
   # Route53 Hosted Zone Lookup
   HostedZoneLookup:
@@ -585,7 +569,7 @@ Outputs:
       2. Include custom error pages: ${NotFoundPagePath} and ${ForbiddenPagePath}
       3. DNS Configuration: Check CreateDNSRecords parameter (${CreateDNSRecords})
       4. Test cookie issuance via custom domain: https://${ApiDomainName}/issue-cookie
-      5. Verify protected paths redirect unauthenticated users to ${SigninPath}
+      5. Verify protected paths redirect unauthenticated users to ${SigninPagePath}
       6. Test error pages by accessing non-existent URLs
       
       S3 Bucket: ${StaticSiteBucket}

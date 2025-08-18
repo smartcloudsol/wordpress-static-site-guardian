@@ -72,11 +72,11 @@ This creates:
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | **ProtectedPaths** | `/dashboard,/profile,/admin` | Comma-separated paths to protect |
-| **SigninPath** | `/signin` | Path to redirect unauthenticated users |
+| **SigninPagePath** | `/signin` | Path to redirect unauthenticated users |
 | **CookieExpirationDays** | `30` | Cookie lifetime (1-365 days) |
 | **S3BucketName** | *(auto-generated)* | Custom S3 bucket name (optional) |
-| **NotFoundPagePath** | `/404.html` | Custom 404 error page path |
-| **ForbiddenPagePath** | `/403.html` | Custom 403 error page path |
+| **NotFoundPagePath** | `/404` | Custom 404 error page path |
+| **ForbiddenPagePath** | `/403` | Custom 403 error page path |
 | **CreateDNSRecords** | `true` | Automatically create Route53 DNS records |
 | **EnableDetailedLogging** | `false` | Enable CloudWatch logging and monitoring |
 
@@ -94,7 +94,7 @@ After successful deployment:
 ### 2. Upload Static Files
 Upload your WordPress static files to the S3 bucket, including:
 - **Static Site Content**: All your WordPress-generated files
-- **Error Pages**: Custom 404 and 403 pages (default: `/404.html`, `/403.html`)
+- **Error Pages**: Custom 404 and 403 pages (default: `/404`, `/403`)
 - **Protected Content**: Files for protected paths in their respective directories
 
 ### 3. Test Protection
@@ -480,8 +480,8 @@ This will output:
   --signin-path "/signin" \
   --expiration-days 30 \
   --s3-bucket-name "my-custom-bucket" \
-  --not-found-page "/custom-404.html" \
-  --forbidden-page "/custom-403.html" \
+  --not-found-page "/custom-404" \
+  --forbidden-page "/custom-403" \
   --enable-logging
 ```
 
@@ -668,7 +668,7 @@ if (response.ok) {
 
 ### Environment Variables
 The Lambda function uses these environment variables:
-- `CLOUDFRONT_DOMAIN`: Distribution domain name
+- `DOMAIN_NAME`: Your main domain for CloudFront
 - `KEY_PAIR_ID`: CloudFront public key identifier
 - `COOKIE_EXPIRATION_DAYS`: Cookie lifetime in days
 - `PROTECTED_PATHS`: Comma-separated list of protected paths
@@ -678,7 +678,7 @@ The Lambda function uses these environment variables:
 ### CloudFormation Parameters
 Key parameters for customization:
 - `ProtectedPaths`: List of paths to protect
-- `SigninPath`: Custom sign-in page path
+- `SigninPagePath`: Custom sign-in page path
 - `CognitoRefreshTokenValidity`: Cookie expiration alignment
 - `KmsKeyId`: KMS key for private key storage
 - `PublicKeyContent`: RSA public key content

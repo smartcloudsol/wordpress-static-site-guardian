@@ -126,16 +126,16 @@ def create_cloudfront_function(props):
     
     name = props['Name']
     protected_paths = props['ProtectedPaths']
-    signin_path = props['SigninPath']
+    signin_page_path = props['SigninPagePath']
     
     # Generate the function code
-    function_code = generate_function_code(protected_paths, signin_path)
+    function_code = generate_function_code(protected_paths, signin_page_path)
     
     response = cloudfront.create_function(
         Name=name,
         FunctionConfig={
             'Comment': 'Handle authentication and path rewriting for protected content',
-            'Runtime': 'cloudfront-js-1.0'
+            'Runtime': 'cloudfront-js-2.0'
         },
         FunctionCode=function_code.encode('utf-8')
     )
@@ -163,7 +163,7 @@ def create_path_rewrite_function(props):
         Name=name,
         FunctionConfig={
             'Comment': 'Rewrite restricted paths back to original paths',
-            'Runtime': 'cloudfront-js-1.0'
+            'Runtime': 'cloudfront-js-2.0'
         },
         FunctionCode=function_code.encode('utf-8')
     )
@@ -234,6 +234,15 @@ function handler(event) {{
                 }} else {{
                     request.uri = originalPath + remainingPath;
                 }}
+                if (request.uri.endsWith("/")) {
+                    request.uri = "/www" + request.uri + "index.html";
+                }
+                else if (!request.uri.includes(".")) {
+                    request.uri = "/www" + request.uri + "/index.html";
+                }
+                else {
+                    request.uri = "/www" + request.uri;
+                }        
             }}
         }}
     }}
@@ -242,7 +251,7 @@ function handler(event) {{
 }}
 """
 
-def generate_function_code(protected_paths, signin_path):
+def generate_function_code(protected_paths, signin_page_path):
     """Generate CloudFront Function code"""
     
     return f"""
@@ -259,7 +268,7 @@ function handler(event) {{
         protectedPaths[i] = protectedPaths[i].replace(/^\\s+|\\s+$/g, '');
     }}
     
-    var signinPath = '{signin_path}';
+    var signinPath = '{signin_page_path}';
     
     // Check if the request is for a protected path
     var isProtectedPath = false;
@@ -275,6 +284,15 @@ function handler(event) {{
     
     // If not a protected path, allow the request
     if (!isProtectedPath) {{
+        if (request.uri.endsWith("/")) {
+            request.uri = "/www" + request.uri + "index.html";
+        }
+        else if (!request.uri.includes(".")) {
+            request.uri = "/www" + request.uri + "/index.html";
+        }
+        else {
+            request.uri = "/www" + request.uri;
+        }        
         return request;
     }}
     
@@ -288,7 +306,7 @@ function handler(event) {{
             statusDescription: 'Found',
             headers: {{
                 'location': {{ 
-                    value: signinPath + '?redirect=' + encodeURIComponent(uri) 
+                    value: signinPath + '?redirect_to=' + encodeURIComponent(uri) 
                 }},
                 'cache-control': {{ 
                     value: 'no-cache, no-store, must-revalidate' 
