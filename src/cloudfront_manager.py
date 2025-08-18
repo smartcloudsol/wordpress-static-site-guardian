@@ -429,6 +429,19 @@ def update_distribution(props):
         
         logger.info(f"Retrieved distribution config, ETag: {etag}")
         
+        # Log config structure for debugging
+        try:
+            config_keys = list(config.keys()) if isinstance(config, dict) else []
+            logger.info(f"Distribution config keys: {config_keys}")
+            
+            # Check Origins structure specifically
+            origins_raw = config.get('Origins')
+            logger.info(f"Origins type: {type(origins_raw)}")
+            if origins_raw:
+                logger.info(f"Origins content (first 500 chars): {str(origins_raw)[:500]}")
+        except Exception as debug_error:
+            logger.error(f"Error debugging config structure: {debug_error}")
+        
         # Get the distribution domain name
         dist_response = cloudfront.get_distribution(Id=distribution_id)
         domain_name = dist_response['Distribution']['DomainName']
@@ -436,12 +449,26 @@ def update_distribution(props):
         logger.info(f"Distribution domain name: {domain_name}")
         
         # Log current origins for debugging
-        current_origins = config.get('Origins', [])
-        logger.info(f"Current origins count: {len(current_origins)}")
-        for i, origin in enumerate(current_origins):
-            origin_id = origin.get('Id', 'NO_ID')
-            origin_domain = origin.get('DomainName', 'NO_DOMAIN')
-            logger.info(f"Origin {i}: Id={origin_id}, Domain={origin_domain}")
+        try:
+            current_origins = config.get('Origins', [])
+            if not isinstance(current_origins, list):
+                logger.error(f"Origins is not a list, type: {type(current_origins)}, value: {str(current_origins)[:200]}")
+                current_origins = []
+            
+            logger.info(f"Current origins count: {len(current_origins)}")
+            for i, origin in enumerate(current_origins):
+                try:
+                    if isinstance(origin, dict):
+                        origin_id = origin.get('Id', 'NO_ID')
+                        origin_domain = origin.get('DomainName', 'NO_DOMAIN')
+                        logger.info(f"Origin {i}: Id={origin_id}, Domain={origin_domain}")
+                    else:
+                        logger.warning(f"Origin {i}: Unexpected type {type(origin)}, value: {str(origin)[:100]}")
+                except Exception as origin_error:
+                    logger.error(f"Error processing origin {i}: {origin_error}")
+        except Exception as origins_error:
+            logger.error(f"Error processing origins: {origins_error}")
+            current_origins = []
         
         # Add self-origin if it doesn't exist
         self_origin_id = 'CloudFrontSelfOrigin'
@@ -452,36 +479,51 @@ def update_distribution(props):
         # Safely check for existing self-origin
         has_self_origin = False
         try:
-            has_self_origin = any(
-                origin.get('Id') == self_origin_id 
-                for origin in config.get('Origins', [])
-                if isinstance(origin, dict) and 'Id' in origin
-            )
+            origins_list = config.get('Origins', [])
+            if isinstance(origins_list, list):
+                has_self_origin = any(
+                    origin.get('Id') == self_origin_id 
+                    for origin in origins_list
+                    if isinstance(origin, dict) and 'Id' in origin
+                )
+                logger.info(f"Self-origin check completed: has_self_origin={has_self_origin}")
+            else:
+                logger.error(f"Origins is not a list: {type(origins_list)}")
+                has_self_origin = False
         except Exception as e:
-            logger.warning(f"Error checking existing origins: {e}")
+            logger.error(f"Error checking existing origins: {e}", exc_info=True)
             has_self_origin = False
         
         if not has_self_origin:
-            # Ensure Origins is a list
-            if 'Origins' not in config or not isinstance(config['Origins'], list):
-                logger.warning("Origins not found or not a list, initializing empty list")
-                config['Origins'] = []
-            
-            logger.info(f"Adding self-origin with ID '{self_origin_id}' and domain '{domain_name}'")
-            config['Origins'].append({
-                'Id': self_origin_id,
-                'DomainName': domain_name,
-                'CustomOriginConfig': {
-                    'HTTPPort': 443,
-                    'HTTPSPort': 443,
-                    'OriginProtocolPolicy': 'https-only',
-                    'OriginSSLProtocols': {
-                        'Quantity': 1,
-                        'Items': ['TLSv1.2']
+            try:
+                # Ensure Origins is a list
+                if 'Origins' not in config:
+                    logger.warning("Origins key not found in config, creating new Origins list")
+                    config['Origins'] = []
+                elif not isinstance(config['Origins'], list):
+                    logger.error(f"Origins is not a list (type: {type(config['Origins'])}), replacing with empty list")
+                    config['Origins'] = []
+                
+                logger.info(f"Adding self-origin with ID '{self_origin_id}' and domain '{domain_name}'")
+                new_origin = {
+                    'Id': self_origin_id,
+                    'DomainName': domain_name,
+                    'CustomOriginConfig': {
+                        'HTTPPort': 443,
+                        'HTTPSPort': 443,
+                        'OriginProtocolPolicy': 'https-only',
+                        'OriginSSLProtocols': {
+                            'Quantity': 1,
+                            'Items': ['TLSv1.2']
+                        }
                     }
                 }
-            })
-            changes_made = True
+                config['Origins'].append(new_origin)
+                changes_made = True
+                logger.info("Successfully added self-origin")
+            except Exception as origin_add_error:
+                logger.error(f"Error adding self-origin: {origin_add_error}", exc_info=True)
+                # Continue without adding self-origin
         else:
             logger.info(f"Self-origin '{self_origin_id}' already exists")
         
