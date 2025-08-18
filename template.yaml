@@ -12,7 +12,7 @@ Metadata:
     ReadmeUrl: README.md
     Labels: ['wordpress', 'cloudfront', 'static-site', 'authentication', 'security', 'signed-cookies']
     HomePageUrl: https://wpsuite.io
-    SemanticVersion: 1.0.10
+    SemanticVersion: 1.0.18
     SourceCodeUrl: https://github.com/smartcloudsol/wordpress-static-site-guardian
 
 Parameters:
@@ -114,14 +114,6 @@ Globals:
     Environment:
       Variables:
         LOG_LEVEL: !If [EnableLogging, 'DEBUG', 'INFO']
-  Api:
-    Cors:
-      AllowMethods: "'GET,OPTIONS'"
-      AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Amz-Security-Token'"
-      AllowOrigin: "'*'"
-    Auth:
-      DefaultAuthorizer: AWS_IAM
-    EndpointConfiguration: REGIONAL
 
 Resources:
   # S3 Bucket for static site hosting
@@ -193,6 +185,7 @@ Resources:
                 - cloudfront:CreateDistribution
                 - cloudfront:UpdateDistribution
                 - cloudfront:GetDistribution
+                - cloudfront:GetDistributionConfig
                 - route53:ListHostedZones
                 - route53:GetHostedZone
               Resource: '*'
@@ -242,6 +235,17 @@ Resources:
       Name: !Sub '${AWS::StackName}-path-rewrite'
       ProtectedPaths: !Join [',', !Ref ProtectedPaths]
 
+  # Custom Resource for CloudFront Distribution Update (adds self-origin and protected path behaviors)
+  CloudFrontDistributionUpdate:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt CloudFrontResourceManager.Arn
+      ResourceType: 'DistributionUpdate'
+      DistributionId: !Ref CloudFrontDistribution
+      ProtectedPaths: !Join [',', !Ref ProtectedPaths]
+      ViewerRequestFunctionArn: !GetAtt ViewerRequestFunction.FunctionARN
+      PathRewriteFunctionArn: !GetAtt PathRewriteFunction.FunctionARN
+
   # CloudFront Distribution (using standard CloudFormation)
   CloudFrontDistribution:
     Type: AWS::CloudFront::Distribution
@@ -254,6 +258,7 @@ Resources:
             DomainName: !GetAtt StaticSiteBucket.RegionalDomainName
             S3OriginConfig: {}
             OriginAccessControlId: !GetAtt OriginAccessControl.OriginAccessControlId
+
         DefaultCacheBehavior:
           TargetOriginId: S3Origin
           ViewerProtocolPolicy: redirect-to-https
@@ -377,12 +382,7 @@ Resources:
                 - ssm:GetParameter
                 - ssm:GetParameters
               Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudfront/private-key/*'
-      Events:
-        CookieApi:
-          Type: Api
-          Properties:
-            Path: /issue-cookie
-            Method: GET
+
 
   # API Gateway Custom Domain
   ApiGatewayDomainName:
@@ -395,13 +395,101 @@ Resources:
           - REGIONAL
       SecurityPolicy: TLS_1_2
 
+  # API Gateway REST API
+  ServerlessRestApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub '${AWS::StackName}-api'
+      Description: 'API for WordPress Static Site Guardian cookie issuance'
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  # API Gateway Deployment
+  ApiGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - ApiGatewayGetMethod
+      - ApiGatewayOptionsMethod
+    Properties:
+      RestApiId: !Ref ServerlessRestApi
+      StageName: Prod
+
+  # Lambda Permission for API Gateway
+  LambdaApiGatewayPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CookieSigningFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ServerlessRestApi}/*/*'
+
+  # API Gateway Method for OPTIONS (CORS preflight)
+  ApiGatewayOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ServerlessRestApi
+      ResourceId: !Ref ApiGatewayResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      RequestParameters:
+        method.request.header.origin: true
+      Integration:
+        Type: MOCK
+        IntegrationHttpMethod: POST
+        PassthroughBehavior: NEVER
+        RequestTemplates:
+          application/json: |
+            {"statusCode": 200}
+            $input.json("$")
+            #set($origin = $input.params("origin"))
+            #set($context.responseOverride.header.Access-Control-Allow-Origin="$origin")
+            #set($context.responseOverride.header.Access-Control-Allow-Credentials="true")
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Amz-Security-Token'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
+              method.response.header.Access-Control-Allow-Credentials: "'true'"
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: false
+            method.response.header.Access-Control-Allow-Methods: false
+            method.response.header.Access-Control-Allow-Credentials: false
+
+  # API Gateway Resource for /issue-cookie
+  ApiGatewayResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref ServerlessRestApi
+      ParentId: !GetAtt ServerlessRestApi.RootResourceId
+      PathPart: issue-cookie
+
+  # API Gateway Method for GET /issue-cookie
+  ApiGatewayGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref ServerlessRestApi
+      ResourceId: !Ref ApiGatewayResource
+      HttpMethod: GET
+      AuthorizationType: AWS_IAM
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CookieSigningFunction.Arn}/invocations'
+        Credentials: !Ref AWS::NoValue
+        IntegrationResponses:
+          - StatusCode: 200
+
   # API Gateway Base Path Mapping
   ApiGatewayBasePathMapping:
     Type: AWS::ApiGateway::BasePathMapping
+    DependsOn: ApiGatewayDeployment
     Properties:
       DomainName: !Ref ApiGatewayDomainName
       RestApiId: !Ref ServerlessRestApi
-      Stage: !Ref ServerlessRestApiProdStage
+      Stage: Prod
 
   # Route53 Hosted Zone Lookup
   HostedZoneLookup:

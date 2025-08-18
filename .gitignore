@@ -4,6 +4,7 @@
 *~
 *.bak
 *.backup
+DEVPOST_SUBMISSION.md
 
 # OS files
 .DS_Store
@@ -18,6 +19,9 @@ Thumbs.db
 # Logs
 logs/
 *.log
+
+# Keys
+./keys
 
 # Python
 __pycache__/

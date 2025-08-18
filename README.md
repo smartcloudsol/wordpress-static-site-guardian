@@ -92,6 +92,8 @@ After successful deployment:
   - **WWW Subdomain** → CloudFront Distribution Domain
 
 ### 2. Upload Static Files
+
+> **Important:** Upload your static WordPress site into the `www/` prefix of the created S3 bucket. The CloudFront and Lambda code expect all static content to be placed under `s3://<bucket-name>/www/`. Do not upload files directly to the bucket root.
 Upload your WordPress static files to the S3 bucket, including:
 - **Static Site Content**: All your WordPress-generated files
 - **Error Pages**: Custom 404 and 403 pages (default: `/404`, `/403`)
@@ -192,11 +194,8 @@ Typical monthly costs for a medium-traffic site:
 
 ---
 
-# WordPress Static Site Guardian
 
-**🚀 Now Available in AWS Serverless Application Repository!**
-
-WordPress Static Site Guardian is a complete, enterprise-grade infrastructure solution for protecting static WordPress-generated sites using CloudFront signed cookies, API Gateway, and Lambda functions. Now available as a one-click deployable application in the AWS Serverless Application Repository (SAR).
+---
 
 ## 📦 Deployment Options
 
