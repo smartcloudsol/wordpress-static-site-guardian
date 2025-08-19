@@ -17,6 +17,7 @@ DOMAIN_NAME=""
 API_DOMAIN_NAME=""
 CERTIFICATE_ARN=""
 PROTECTED_PATHS="/dashboard,/profile,/admin"
+S3_WWWROOT_PREFIX="wwwroot"
 SIGNIN_PAGE_PATH="/signin"
 COGNITO_REFRESH_TOKEN_VALIDITY=30
 REGION="us-east-1"
@@ -50,6 +51,7 @@ OPTIONS:
     -c, --certificate-arn ARN            ACM certificate ARN in us-east-1 (required)
     -k, --kms-key-id KEY_ID              KMS Key ID containing encrypted private key (required)
     -u, --public-key-content CONTENT     Base64 public key content (required)
+    -w, --s3-wwwroot-prefix PREFIX       Non-empty S3 prefix that does not start or end with '/' (required)
     -p, --protected-paths PATHS          Comma-separated protected paths (default: /dashboard,/profile,/admin)
     -i, --signin-path PATH               Path for sign-in page (default: /signin)
     -t, --token-validity DAYS            Cookie expiration in days (default: 30)
@@ -94,6 +96,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -u|--public-key-content)
             PUBLIC_KEY_CONTENT="$2"
+            shift 2
+            ;;
+        -w|--s3-wwwroot-prefix)
+            S3_WWWROOT_PREFIX="$2"
             shift 2
             ;;
         -p|--protected-paths)
@@ -161,6 +167,7 @@ echo "  API Domain: $API_DOMAIN_NAME"
 echo "  Certificate ARN: $CERTIFICATE_ARN"
 echo "  KMS Key ID: $KMS_KEY_ID"
 echo "  Public Key Length: ${#PUBLIC_KEY_CONTENT} characters"
+echo "  S3 WWWRoot prefix: $S3_WWWROOT_PREFIX"
 echo "  Protected Paths: $PROTECTED_PATHS"
 echo "  Signin Path: $SIGNIN_PAGE_PATH"
 echo "  Token Validity: $COGNITO_REFRESH_TOKEN_VALIDITY days"
@@ -197,6 +204,7 @@ aws cloudformation deploy \
     --template-file wordpress-protection-infrastructure.yaml \
     --stack-name "$STACK_NAME" \
     --parameter-overrides \
+        S3WWWRoot="$S3_WWWROOT_PREFIX" \
         ProtectedPaths="$PROTECTED_PATHS" \
         CognitoRefreshTokenValidity="$COGNITO_REFRESH_TOKEN_VALIDITY" \
         DomainName="$DOMAIN_NAME" \
@@ -214,20 +222,20 @@ if [[ $? -eq 0 ]]; then
     # Get stack outputs
     print_status "Retrieving stack outputs..."
     
-    S3_BUCKET_URL=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query "Stacks[0].Outputs[?OutputKey=='S3BucketUrl'].OutputValue" --output text)
+    S3_BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query "Stacks[0].Outputs[?OutputKey=='S3BucketName'].OutputValue" --output text)
     CLOUDFRONT_DOMAIN=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionDomain'].OutputValue" --output text)
     API_GATEWAY_URL=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query "Stacks[0].Outputs[?OutputKey=='ApiGatewayInvokeUrl'].OutputValue" --output text)
     
     echo
     print_status "Deployment Summary:"
-    echo "  S3 Bucket URL: $S3_BUCKET_URL"
+    echo "  S3 Bucket: $S3_BUCKET_NAME"
     echo "  CloudFront Domain: $CLOUDFRONT_DOMAIN"
     echo "  API Gateway URL: $API_GATEWAY_URL"
     echo
     
     print_warning "IMPORTANT: Manual steps required to complete setup:"
     echo "1. Configure DNS records to point your domains to CloudFront and API Gateway"
-    echo "2. Upload your static WordPress files to the S3 bucket"
+    echo "2. Upload your static WordPress files to the S3 bucket: $S3_BUCKET_NAME/$S3_WWWROOT_PREFIX"
     echo "3. Test the cookie issuance endpoint with proper IAM authentication"
     echo "4. Verify that protected paths are properly secured"
     

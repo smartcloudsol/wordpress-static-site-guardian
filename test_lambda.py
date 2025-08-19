@@ -83,6 +83,13 @@ def test_imports():
         except ImportError:
             print("⚠️  urllib3 not available locally (but available in Lambda runtime)")
         
+        # Test deepcopy (might not be available locally)
+        try:
+            from copy import deepcopy
+            print("✅ deepcopy available")
+        except ImportError:
+            print("⚠️  deepcopy not available locally (but available in Lambda runtime)")
+        
         # boto3 and botocore are provided by Lambda runtime
         print("ℹ️  boto3 and botocore will be available in Lambda runtime")
         

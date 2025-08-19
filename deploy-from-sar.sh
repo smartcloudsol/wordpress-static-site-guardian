@@ -35,6 +35,7 @@ PROTECTED_PATHS="/dashboard,/profile,/admin"
 SIGNIN_PAGE_PATH="/signin"
 COOKIE_EXPIRATION_DAYS=30
 S3_BUCKET_NAME=""
+S3_WWWROOT_PREFIX="wwwroot"
 NOT_FOUND_PAGE_PATH="/404"
 FORBIDDEN_PAGE_PATH="/403"
 CREATE_DNS_RECORDS="true"
@@ -56,6 +57,7 @@ REQUIRED OPTIONS:
     -c, --certificate-arn ARN            ACM certificate ARN in us-east-1 (required)
     -k, --kms-key-id KEY_ID              KMS Key ID containing encrypted private key (required)
     -u, --public-key-content CONTENT     Base64 public key content (required)
+    -w, --s3-wwwroot-prefix PREFIX       Non-empty S3 prefix that does not start or end with '/' (required)
 
 OPTIONAL OPTIONS:
     -p, --protected-paths PATHS          Comma-separated protected paths (default: /dashboard,/profile,/admin)
@@ -86,6 +88,7 @@ EXAMPLES:
        -c arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012 \\
        -k 12345678-1234-1234-1234-123456789012 \\
        -u "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA..." \\
+       -w "wwwroot" \\
        -p "/admin,/members" \\
        -i "/login" \\
        -e 7 \\
@@ -142,6 +145,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -b|--s3-bucket-name)
             S3_BUCKET_NAME="$2"
+            shift 2
+            ;;
+        -w|--s3-wwwroot-prefix)
+            S3_WWWROOT_PREFIX="$2"
             shift 2
             ;;
         --not-found-page)
@@ -217,6 +224,7 @@ echo "  API Domain: $API_DOMAIN_NAME"
 echo "  Certificate ARN: $CERTIFICATE_ARN"
 echo "  KMS Key ID: $KMS_KEY_ID"
 echo "  Public Key Length: ${#PUBLIC_KEY_CONTENT} characters"
+echo "  S3 WWWRoot Prefix: $S3_WWWROOT_PREFIX"
 echo "  Protected Paths: $PROTECTED_PATHS"
 echo "  Signin Path: $SIGNIN_PAGE_PATH"
 echo "  Cookie Expiration: $COOKIE_EXPIRATION_DAYS days"
@@ -245,6 +253,7 @@ aws serverlessrepo create-cloud-formation-change-set \
         ParameterKey=CertificateArn,ParameterValue="$CERTIFICATE_ARN" \
         ParameterKey=KmsKeyId,ParameterValue="$KMS_KEY_ID" \
         ParameterKey=PublicKeyContent,ParameterValue="$PUBLIC_KEY_CONTENT" \
+        ParameterKey=S3WWWRoot,ParameterValue="$S3_WWWROOT_PREFIX" \
         ParameterKey=ProtectedPaths,ParameterValue="$PROTECTED_PATHS" \
         ParameterKey=SigninPagePath,ParameterValue="$SIGNIN_PAGE_PATH" \
         ParameterKey=CookieExpirationDays,ParameterValue="$COOKIE_EXPIRATION_DAYS" \
@@ -300,7 +309,7 @@ if [[ $? -eq 0 ]]; then
     print_warning "IMPORTANT: Complete these final steps:"
     echo "1. Configure DNS records to point $DOMAIN_NAME to $CLOUDFRONT_DOMAIN"
     echo "2. Configure DNS records to point $API_DOMAIN_NAME to the API Gateway"
-    echo "3. Upload your static WordPress files to S3 bucket: $S3_BUCKET_NAME"
+    echo "3. Upload your static WordPress files to S3 bucket: $S3_BUCKET_NAME/$S3_WWWROOT_PREFIX"
     echo "4. Test the cookie issuance endpoint with proper IAM authentication"
     echo "5. Verify that protected paths are properly secured"
     

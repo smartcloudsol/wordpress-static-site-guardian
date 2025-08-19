@@ -5,6 +5,7 @@ from botocore.exceptions import ClientError
 import urllib3
 import signal
 import time
+from copy import deepcopy
 
 # Configure logging
 logger = logging.getLogger()
@@ -324,9 +325,10 @@ def create_cloudfront_function(props):
     name = props['Name']
     protected_paths = props['ProtectedPaths']
     signin_page_path = props['SigninPagePath']
+    wwwroot = props['S3WWWRoot']
     
     # Generate the function code
-    function_code = generate_function_code(protected_paths, signin_page_path)
+    function_code = generate_function_code(protected_paths, signin_page_path, wwwroot)
     
     response = cloudfront.create_function(
         Name=name,
@@ -353,9 +355,10 @@ def create_path_rewrite_function(props):
     
     name = props['Name']
     protected_paths = props['ProtectedPaths']
+    wwwroot = props['S3WWWRoot']
     
     # Generate the path rewrite function code
-    function_code = generate_path_rewrite_code(protected_paths)
+    function_code = generate_path_rewrite_code(protected_paths, wwwroot)
     
     response = cloudfront.create_function(
         Name=name,
@@ -403,6 +406,112 @@ def lookup_hosted_zone(props):
     except Exception as e:
         logger.error(f"Error looking up hosted zone: {e}")
         raise
+
+def clean_distribution_config(config: dict) -> dict:
+    """
+    Clean up a CloudFront DistributionConfig dict before calling update_distribution:
+    - If CachePolicyId is present in a behavior, remove legacy ForwardedValues in the same behavior.
+    - Remove None values globally.
+    - Preserve empty-string values for required-or-allowed-empty fields (CloudFront expects the key to exist):
+        * DistributionConfig.Comment
+        * DistributionConfig.WebACLId
+        * DistributionConfig.DefaultRootObject
+        * Origins.Items[*].OriginPath
+        * Origins.Items[*].S3OriginConfig.OriginAccessIdentity ("" when using OAC instead of OAI)
+    - Adjust Quantity fields to match Items length for common collections.
+    """
+    # Paths where empty string values must be preserved (keep as "")
+    PRESERVE_EMPTY_PATHS = {
+        ("Comment",),
+        ("WebACLId",),
+        ("DefaultRootObject",),
+        ("Origins", "Items", "*", "OriginPath"),
+        ("Origins", "Items", "*", "S3OriginConfig", "OriginAccessIdentity"),
+        ("DefaultCacheBehavior", "FieldLevelEncryptionId"),
+        ("CacheBehaviors", "Items", "*", "FieldLevelEncryptionId"),
+    }
+
+    def _is_preserved_empty(path_tuple):
+        """Return True if an empty string must be preserved at this path."""
+        for pat in PRESERVE_EMPTY_PATHS:
+            if len(pat) != len(path_tuple):
+                continue
+            ok = True
+            for a, b in zip(pat, path_tuple):
+                if a != "*" and a != b:
+                    ok = False
+                    break
+            if ok:
+                return True
+        return False
+
+    def _clean(obj, path=()):
+        """Recursively clean dicts/lists with special CloudFront rules."""
+        if isinstance(obj, dict):
+            # Special: if CachePolicyId is present, drop legacy ForwardedValues in the same object
+            if "CachePolicyId" in obj and "ForwardedValues" in obj:
+                obj.pop("ForwardedValues", None)
+
+            # General: remove None and (non-preserved) empty strings; recurse
+            for k in list(obj.keys()):
+                v = obj[k]
+                subpath = path + (k,)
+                if v is None:
+                    obj.pop(k, None)
+                    continue
+                if v == "" and not _is_preserved_empty(subpath):
+                    obj.pop(k, None)
+                    continue
+                _clean(v, subpath)
+
+        elif isinstance(obj, list):
+            for idx, v in enumerate(obj):
+                _clean(v, path + (str(idx),))
+
+    def _fix_quantities(cfg):
+        """
+        Ensure Quantity matches Items length for common collections.
+        If Items becomes empty, we keep Quantity=0 and optionally drop the empty Items (CloudFront accepts both).
+        """
+        COLLECTION_PATHS = [
+            ("Aliases",),
+            ("Origins",),
+            ("CacheBehaviors",),
+            ("CustomErrorResponses",),
+            ("OrderedCacheBehaviors",),
+            ("DefaultCacheBehavior", "LambdaFunctionAssociations"),
+            ("DefaultCacheBehavior", "FunctionAssociations"),
+        ]
+
+        def get_nested(container, keys):
+            cur = container
+            for k in keys:
+                if not isinstance(cur, dict):
+                    return None
+                cur = cur.get(k)
+            return cur
+
+        for coll in COLLECTION_PATHS:
+            parent_keys = coll[:-1]
+            last_key = coll[-1]
+            parent = get_nested(cfg, parent_keys) if parent_keys else cfg
+            if isinstance(parent, dict) and isinstance(parent.get(last_key), dict):
+                coll_dict = parent[last_key]
+                items = coll_dict.get("Items")
+                if isinstance(items, list):
+                    new_qty = len(items)
+                    old_qty = coll_dict.get("Quantity")
+                    if old_qty != new_qty:
+                        coll_dict["Quantity"] = new_qty
+                    if new_qty == 0:
+                        # Optional: remove empty Items to minimize payload
+                        coll_dict.pop("Items", None)
+
+    cleaned = deepcopy(config)
+    _clean(cleaned)
+    _fix_quantities(cleaned)
+
+    return cleaned
 
 def update_distribution(props):
     """Update CloudFront distribution with self-origin and protected path behaviors"""
@@ -594,7 +703,7 @@ def update_distribution(props):
             if not path:
                 continue
                 
-            path_pattern = f"{path.lstrip('/')}*"
+            path_pattern = f"{path}*"
             
             # Skip if behavior already exists
             if path_pattern in existing_patterns:
@@ -622,7 +731,11 @@ def update_distribution(props):
                         'EventType': 'viewer-request',
                         'FunctionARN': viewer_request_function_arn
                     }]
-                }
+                },
+                'LambdaFunctionAssociations': {'Quantity': 0, 'Items': []},
+                'TrustedKeyGroups': {'Enabled': False, 'Quantity': 0},
+                'TrustedSigners': {'Enabled': False, 'Quantity': 0},
+                'GrpcConfig': {'Enabled': False},
             }
             
             new_behaviors.append(behavior)
@@ -658,14 +771,27 @@ def update_distribution(props):
                 except Exception as alt_error:
                     logger.error(f"Alternative cache behavior update also failed: {alt_error}")
                     # Continue without adding cache behaviors
-        
+
         # Only update if we made changes
         if changes_made or not has_self_origin:
             logger.info("Updating distribution with new configuration")
             try:
+                # Default behavior
+                if isinstance(config.get('DefaultCacheBehavior'), dict):
+                    # FLE placeholder to keep API happy even if unused
+                    config['DefaultCacheBehavior'].setdefault('FieldLevelEncryptionId', '')
+
+                # Ordered behaviors
+                items = (config.get('CacheBehaviors') or {}).get('Items', []) or []
+                for i, beh in enumerate(items):
+                    if not isinstance(beh, dict):
+                        continue
+                    beh.setdefault('FieldLevelEncryptionId', '')
+
+                cleaned_config = clean_distribution_config(config)
                 cloudfront.update_distribution(
                     Id=distribution_id,
-                    DistributionConfig=config,
+                    DistributionConfig=cleaned_config,
                     IfMatch=etag
                 )
                 logger.info("Distribution update successful")
@@ -686,7 +812,7 @@ def update_distribution(props):
         logger.error(f"Error updating distribution {distribution_id}: {e}", exc_info=True)
         raise
 
-def generate_path_rewrite_code(protected_paths):
+def generate_path_rewrite_code(protected_paths, wwwroot):
     """Generate CloudFront Function code for path rewriting"""
     
     return f"""
@@ -718,13 +844,13 @@ function handler(event) {{
                     request.uri = originalPath + remainingPath;
                 }}
                 if (request.uri.endsWith('/')) {{
-                    request.uri = '/www' + request.uri + 'index.html';
+                    request.uri = '/{wwwroot}' + request.uri + 'index.html';
                 }}
                 else if (!request.uri.includes('.')) {{
-                    request.uri = '/www' + request.uri + '/index.html';
+                    request.uri = '/{wwwroot}' + request.uri + '/index.html';
                 }}
                 else {{
-                    request.uri = '/www' + request.uri;
+                    request.uri = '/{wwwroot}' + request.uri;
                 }}        
             }}
         }}
@@ -734,7 +860,7 @@ function handler(event) {{
 }}
 """
 
-def generate_function_code(protected_paths, signin_page_path):
+def generate_function_code(protected_paths, signin_page_path, wwwroot):
     """Generate CloudFront Function code"""
     
     return f"""
@@ -768,13 +894,13 @@ function handler(event) {{
     // If not a protected path, allow the request
     if (!isProtectedPath) {{
         if (request.uri.endsWith('/')) {{
-            request.uri = '/www' + request.uri + 'index.html';
+            request.uri = '/{wwwroot}' + request.uri + 'index.html';
         }}
         else if (!request.uri.includes('.')) {{
-            request.uri = '/www' + request.uri + '/index.html';
+            request.uri = '/{wwwroot}' + request.uri + '/index.html';
         }}
         else {{
-            request.uri = '/www' + request.uri;
+            request.uri = '/{wwwroot}' + request.uri;
         }}        
         return request;
     }}
@@ -910,45 +1036,45 @@ def delete_resource(event, resource_type):
     }
 
 def delete_function_with_retry(function_name, max_retries=10):
-    """Delete CloudFront function with retry logic"""
-    
+    """Delete CloudFront Function with IfMatch and backoff."""
     for attempt in range(max_retries):
         try:
-            # Check if function exists first
+            # Fetch latest ETag (describe_function is lighter than get_function)
             try:
-                cloudfront.get_function(Name=function_name)
+                desc = cloudfront.describe_function(Name=function_name)
+                etag = desc['ETag']
             except ClientError as e:
-                if e.response['Error']['Code'] == 'NoSuchFunction':
-                    logger.info(f"Function {function_name} does not exist, skipping deletion")
+                code = e.response['Error']['Code']
+                if code in ('NoSuchFunction', 'NoSuchResource'):
+                    logger.info(f"Function {function_name} not found, skipping deletion")
                     return
                 raise
-            
-            # Try to delete the function
-            cloudfront.delete_function(Name=function_name)
-            logger.info(f"Successfully deleted function: {function_name}")
-            return
-            
-        except ClientError as e:
-            error_code = e.response['Error']['Code']
-            
-            if error_code == 'NoSuchFunction':
-                logger.info(f"Function {function_name} already deleted")
+
+            try:
+                cloudfront.delete_function(Name=function_name, IfMatch=etag)
+                logger.info(f"Successfully deleted function: {function_name}")
                 return
-            elif error_code in ['FunctionInUse', 'InvalidIfMatchVersion']:
-                if attempt < max_retries - 1:
-                    # Longer wait times for function deletion since distribution updates take time
-                    wait_time = min((attempt + 1) * 60, 300)  # Up to 5 minutes
-                    logger.warning(f"Function {function_name} is in use, retrying in {wait_time} seconds (attempt {attempt + 1}/{max_retries})")
+            except ClientError as e:
+                code = e.response['Error']['Code']
+                # Still associated or config is racing: backoff and retry
+                if code in ('FunctionInUse', 'InvalidIfMatchVersion', 'PreconditionFailed'):
+                    wait_time = min((attempt + 1) * 60, 300)  # up to 5 minutes
+                    logger.warning(
+                        f"Delete {function_name} blocked ({code}). "
+                        f"Retrying in {wait_time}s (attempt {attempt+1}/{max_retries})"
+                    )
                     time.sleep(wait_time)
                     continue
-                else:
-                    logger.error(f"Failed to delete function {function_name} after {max_retries} attempts: {e}")
-                    logger.error(f"Function {function_name} may still be associated with a distribution. Manual cleanup required.")
-                    # Don't raise exception, let CloudFormation continue
+                if code in ('NoSuchFunction',):
+                    logger.info(f"Function {function_name} already deleted")
                     return
-            else:
-                logger.error(f"Unexpected error deleting function {function_name}: {e}")
+                # Unexpected => log and stop retrying
+                logger.error(f"Unexpected error deleting {function_name}: {e}")
                 return
+
+        except Exception as e:
+            logger.error(f"Error during delete of {function_name}: {e}")
+            return
 
 def delete_key_group_with_retry(key_group_id, max_retries=5):
     """Delete CloudFront key group with retry logic"""
@@ -1028,68 +1154,78 @@ def delete_public_key_with_retry(public_key_id, max_retries=5):
                 logger.error(f"Unexpected error deleting public key {public_key_id}: {e}")
                 return
 
+def _wait_for_distribution_deployed(distribution_id: str, timeout=900, interval=15):
+    """Poll until the distribution is Deployed (max ~15 perc)."""
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            st = cloudfront.get_distribution(Id=distribution_id)['Distribution']['Status']
+            if st == 'Deployed':
+                return True
+        except Exception as e:
+            logger.warning(f"Polling get_distribution failed: {e}")
+        time.sleep(interval)
+    logger.warning(f"Timed out waiting for distribution {distribution_id} to be Deployed")
+    return False
+
+def _zero_fn_associations(behavior: dict) -> bool:
+    """Zero out both CloudFront Function and Lambda@Edge associations if present."""
+    changed = False
+    for key in ("FunctionAssociations", "LambdaFunctionAssociations"):
+        fa = behavior.get(key)
+        if isinstance(fa, dict) and fa.get("Quantity", 0) > 0:
+            behavior[key] = {"Quantity": 0, "Items": []}
+            changed = True
+    return changed
+
 def remove_function_associations_from_distribution(props):
-    """Remove function associations from CloudFront distribution to allow function deletion"""
-    
+    """Remove function associations from the distribution so Functions can be deleted."""
     try:
         distribution_id = props.get('DistributionId')
         if not distribution_id:
             logger.info("No DistributionId found, skipping function association removal")
             return
-        
+
         logger.info(f"Removing function associations from distribution {distribution_id}")
-        
-        # Get current distribution configuration
-        response = cloudfront.get_distribution_config(Id=distribution_id)
-        config = response['DistributionConfig']
-        etag = response['ETag']
-        
-        # Track if we made any changes
+
+        resp = cloudfront.get_distribution_config(Id=distribution_id)
+        config = resp['DistributionConfig']
+        etag = resp['ETag']
+
         changes_made = False
-        
-        # Remove function associations from default cache behavior
-        if 'FunctionAssociations' in config['DefaultCacheBehavior']:
-            if config['DefaultCacheBehavior']['FunctionAssociations'].get('Quantity', 0) > 0:
-                config['DefaultCacheBehavior']['FunctionAssociations'] = {
-                    'Quantity': 0,
-                    'Items': []
-                }
+
+        # Default behavior
+        if isinstance(config.get('DefaultCacheBehavior'), dict):
+            if _zero_fn_associations(config['DefaultCacheBehavior']):
                 changes_made = True
-                logger.info("Removed function associations from default cache behavior")
-        
-        # Remove function associations from cache behaviors
-        if 'CacheBehaviors' in config:
-            for i, behavior in enumerate(config['CacheBehaviors']):
-                if 'FunctionAssociations' in behavior:
-                    if behavior['FunctionAssociations'].get('Quantity', 0) > 0:
-                        behavior['FunctionAssociations'] = {
-                            'Quantity': 0,
-                            'Items': []
-                        }
-                        changes_made = True
-                        logger.info(f"Removed function associations from cache behavior {i}")
-        
-        # Only update if we made changes
+                # FLE placeholder to keep API happy even if unused
+                config['DefaultCacheBehavior'].setdefault('FieldLevelEncryptionId', "")
+
+        # Ordered behaviors
+        items = (config.get('CacheBehaviors') or {}).get('Items', []) or []
+        for i, beh in enumerate(items):
+            if not isinstance(beh, dict):
+                continue
+            if _zero_fn_associations(beh):
+                changes_made = True
+                beh.setdefault('FieldLevelEncryptionId', "")
+
         if changes_made:
-            # Update the distribution
+            # Run the same cleaner we use elsewhere
+            cleaned = clean_distribution_config(config)
             cloudfront.update_distribution(
                 Id=distribution_id,
-                DistributionConfig=config,
+                DistributionConfig=cleaned,
                 IfMatch=etag
             )
-            
-            logger.info(f"Successfully removed function associations from distribution {distribution_id}")
-            
-            # Wait for the distribution update to propagate
-            import time
-            logger.info("Waiting for distribution update to propagate...")
-            time.sleep(60)  # Longer wait for distribution updates
+            logger.info("Function associations removed, waiting for deployment...")
+            _wait_for_distribution_deployed(distribution_id)
         else:
             logger.info("No function associations found to remove")
-        
+
     except Exception as e:
         logger.error(f"Error removing function associations from distribution: {e}")
-        # Don't raise exception - we want deletion to continue even if this fails
+        # Swallow to let stack deletion proceed
 
 def delete_origin_access_control_with_retry(oac_id, max_retries=5):
     """Delete CloudFront Origin Access Control with retry logic"""

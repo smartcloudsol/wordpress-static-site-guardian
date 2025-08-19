@@ -12,7 +12,7 @@ Metadata:
     ReadmeUrl: README.md
     Labels: ['wordpress', 'cloudfront', 'static-site', 'authentication', 'security', 'signed-cookies']
     HomePageUrl: https://wpsuite.io
-    SemanticVersion: 1.0.22
+    SemanticVersion: 1.0.0
     SourceCodeUrl: https://github.com/smartcloudsol/wordpress-static-site-guardian
 
 Parameters:
@@ -80,6 +80,14 @@ Parameters:
     Description: 'Custom name for the S3 bucket hosting static files. Leave empty to auto-generate a unique name.'
     AllowedPattern: '^$|^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$'
     ConstraintDescription: 'Must be empty or a valid S3 bucket name (3-63 characters, lowercase letters, numbers, and hyphens only)'
+
+  S3WWWRoot:
+    Type: String
+    Default: 'wwwroot'
+    Description: "S3 wwwroot prefix without leading/trailing '/'."
+    AllowedPattern: '^(?!/)(?!.*/$)[A-Za-z0-9!_.*''()/.-]+$'
+    MaxLength: 900
+    ConstraintDescription: "Provide a non-empty S3 prefix that does not start or end with '/'. Allowed characters: letters, digits, and . _ - ! * ' ( ) /"
 
   NotFoundPagePath:
     Type: String
@@ -177,6 +185,7 @@ Resources:
                 - cloudfront:UpdateFunction
                 - cloudfront:DeleteFunction
                 - cloudfront:GetFunction
+                - cloudfront:DescribeFunction
                 - cloudfront:PublishFunction
                 - cloudfront:CreateOriginAccessControl
                 - cloudfront:UpdateOriginAccessControl
@@ -225,6 +234,7 @@ Resources:
       Name: !Sub '${AWS::StackName}-viewer-request'
       ProtectedPaths: !Join [',', !Ref ProtectedPaths]
       SigninPagePath: !Ref SigninPagePath
+      S3WWWRoot:  !Ref S3WWWRoot
 
   # Custom Resource for CloudFront Function (Path Rewriting)
   PathRewriteFunction:
@@ -234,6 +244,7 @@ Resources:
       ResourceType: 'PathRewriteFunction'
       Name: !Sub '${AWS::StackName}-path-rewrite'
       ProtectedPaths: !Join [',', !Ref ProtectedPaths]
+      S3WWWRoot:  !Ref S3WWWRoot
 
   # Custom Resource for CloudFront Distribution Update (adds self-origin and protected path behaviors)
   CloudFrontDistributionUpdate:
@@ -283,11 +294,11 @@ Resources:
         CustomErrorResponses:
           - ErrorCode: 404
             ResponseCode: 404
-            ResponsePagePath: !Ref NotFoundPagePath
+            ResponsePagePath: !Sub '/${S3WWWRoot}${NotFoundPagePath}'
             ErrorCachingMinTTL: 300
           - ErrorCode: 403
             ResponseCode: 403
-            ResponsePagePath: !Ref ForbiddenPagePath
+            ResponsePagePath: !Sub '/${S3WWWRoot}${ForbiddenPagePath}'
             ErrorCachingMinTTL: 300
         Enabled: true
         DefaultRootObject: index.html
@@ -653,7 +664,7 @@ Outputs:
   SetupInstructions:
     Description: 'Next steps to complete the setup'
     Value: !Sub |
-      1. Upload your static WordPress files to S3 bucket: ${StaticSiteBucket}
+      1. Upload your static WordPress files to S3 bucket: ${StaticSiteBucket}/${S3WWWRoot}
       2. Include custom error pages: ${NotFoundPagePath} and ${ForbiddenPagePath}
       3. DNS Configuration: Check CreateDNSRecords parameter (${CreateDNSRecords})
       4. Test cookie issuance via custom domain: https://${ApiDomainName}/issue-cookie
@@ -661,6 +672,7 @@ Outputs:
       6. Test error pages by accessing non-existent URLs
       
       S3 Bucket: ${StaticSiteBucket}
+      S3 WWWRoot Prefix: ${S3WWWRoot}
       CloudFront Domain: ${CloudFrontDistribution.DomainName}
       API Gateway Domain: ${ApiGatewayDomainName.RegionalDomainName}
 
