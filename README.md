@@ -10,7 +10,7 @@ WordPress Static Site Guardian provides comprehensive protection for static Word
 - **Seamless User Experience**: Redirects unauthenticated users to your sign-in page with return URL preservation
 - **Enterprise Security**: Uses RSA-SHA1 signed cookies with KMS-encrypted private keys
 - **Global Performance**: Leverages CloudFront's global edge network for fast content delivery
-- **Easy Integration**: Works with existing authentication systems like Gatey Pro and Amazon Cognito
+- **Easy Integration**: Works with existing authentication systems like [Gatey Pro](https://wpsuite.io) and Amazon Cognito
 
 ## 🏗️ Architecture
 
@@ -134,7 +134,7 @@ Upload your WordPress static files to the S3 bucket, including:
 5. **Authenticated Access**: Verify signed cookies grant access to protected content
 
 ### 4. Integrate with Authentication
-Configure your authentication system (Gatey Pro API Settings and Sign-in/Sign-out Hooks, custom auth, etc.) to call the cookie issuance endpoint after successful login.
+Configure your authentication system ([Gatey Pro](https://wpsuite.io) API Settings and Sign-in/Sign-out Hooks, custom auth, etc.) to call the cookie issuance endpoint after successful login.
 
 ## 📊 Monitoring & Troubleshooting
 
