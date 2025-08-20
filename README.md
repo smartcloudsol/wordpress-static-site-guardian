@@ -120,7 +120,7 @@ After successful deployment:
 
 ### 2. Upload Static Files
 
-> **Important:** Upload your static WordPress site into the `www/` prefix of the created S3 bucket. The CloudFront and Lambda code expect all static content to be placed under `s3://<bucket-name>/<wwwroot>/`. Do not upload files directly to the bucket root.
+> **Important:** Upload your static WordPress site into the `<wwwroot>/` prefix of the created S3 bucket. The CloudFront and Lambda code expect all static content to be placed under `s3://<bucket-name>/<wwwroot>/`. Do not upload files directly to the bucket root.
 Upload your WordPress static files to the S3 bucket, including:
 - **Static Site Content**: All your WordPress-generated files
 - **Error Pages**: Custom 404 and 403 pages (default: `/404`, `/403`)
@@ -192,7 +192,7 @@ This project is organized into logical folders for better maintainability:
 └── 📄 README.md               # This documentation
 ```
 
-For detailed folder structure and usage examples, see [FOLDER_STRUCTURE.md](FOLDER_STRUCTURE.md).
+For detailed folder structure and usage examples, see [FOLDER_STRUCTURE.md](.kiro/fixes/FOLDER_STRUCTURE.md).
 
 ### Quick Start Commands
 

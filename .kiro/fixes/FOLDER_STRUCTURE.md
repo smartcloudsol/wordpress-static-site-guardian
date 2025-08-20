@@ -29,8 +29,6 @@ wordpress-static-site-guardian/
 │           └── 📄 tasks.md          # Implementation task list
 ├── 📄 template.yaml                 # Main CloudFormation/SAM template
 ├── 📄 README.md                     # Main project documentation
-├── 📄 VALIDATION.md                 # Validation tools documentation
-├── 📄 FOLDER_STRUCTURE.md           # This file
 ├── 📄 LICENSE                       # MIT License
 └── 📄 .gitignore                    # Git ignore rules
 ```
