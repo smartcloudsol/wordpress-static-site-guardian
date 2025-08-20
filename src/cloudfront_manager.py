@@ -48,7 +48,7 @@ MODULE_VALID = validate_module()
 
 class TimeoutHandler:
     """Handle Lambda timeout gracefully"""
-    def __init__(self, timeout_seconds=270):  # 4.5 minutes for 5-minute Lambda
+    def __init__(self, timeout_seconds=870):  # 14.5 minutes for 15-minute Lambda
         self.timeout_seconds = timeout_seconds
         self.timed_out = False
     
@@ -243,6 +243,8 @@ def create_resource(event, resource_type):
         return lookup_hosted_zone(props)
     elif resource_type == 'DistributionUpdate':
         return update_distribution(props)
+    elif resource_type == 'ResponsePolicy':
+        return create_response_policy(props)
     elif resource_type == 'Test':
         return {
             'Status': 'TestSuccess', 
@@ -407,6 +409,112 @@ def lookup_hosted_zone(props):
         logger.error(f"Error looking up hosted zone: {e}")
         raise
 
+def create_response_policy(props):
+    """Create CloudFront Response Headers Policy for NoCachePolicy (no empty CSP)."""
+    name = props['Name']
+
+    cfg = {
+        'Name': name,
+        'Comment': 'No-cache policy for protected content - prevents caching with max-age=0',
+        'CustomHeadersConfig': {
+            'Quantity': 3,
+            'Items': [
+                {'Header': 'Cache-Control', 'Value': 'no-store, no-cache, must-revalidate, max-age=0', 'Override': True},
+                {'Header': 'Pragma',        'Value': 'no-cache',                                         'Override': True},
+                {'Header': 'Expires',       'Value': '0',                                               'Override': True},
+            ]
+        },
+        'SecurityHeadersConfig': _build_security_headers_config(props),
+        'ServerTimingHeadersConfig': {'Enabled': False, 'SamplingRate': 0.0}
+    }
+
+    response = cloudfront.create_response_headers_policy(ResponseHeadersPolicyConfig=cfg)
+    return {
+        'ResponseHeadersPolicyId': response['ResponseHeadersPolicy']['Id'],
+        'PhysicalResourceId': response['ResponseHeadersPolicy']['Id']
+    }
+
+def update_response_policy(props, physical_resource_id):
+    """Update CloudFront Response Headers Policy (no empty CSP)."""
+    name = props['Name']
+
+    current = cloudfront.get_response_headers_policy(Id=physical_resource_id)
+    etag = current['ETag']
+
+    cfg = {
+        'Name': name,
+        'Comment': 'No-cache policy for protected content - prevents caching with max-age=0',
+        'CustomHeadersConfig': {
+            'Quantity': 3,
+            'Items': [
+                {'Header': 'Cache-Control', 'Value': 'no-store, no-cache, must-revalidate, max-age=0', 'Override': True},
+                {'Header': 'Pragma',        'Value': 'no-cache',                                         'Override': True},
+                {'Header': 'Expires',       'Value': '0',                                               'Override': True},
+            ]
+        },
+        'SecurityHeadersConfig': _build_security_headers_config(props),
+        'ServerTimingHeadersConfig': {'Enabled': False, 'SamplingRate': 0.0}
+    }
+
+    response = cloudfront.update_response_headers_policy(
+        Id=physical_resource_id,
+        IfMatch=etag,
+        ResponseHeadersPolicyConfig=cfg
+    )
+    return {
+        'ResponseHeadersPolicyId': response['ResponseHeadersPolicy']['Id'],
+        'PhysicalResourceId': physical_resource_id
+    }
+
+def delete_response_policy_with_retry(policy_id, max_retries=10):
+    """Delete CloudFront Response Headers Policy with retry logic"""
+    
+    import time
+    
+    for attempt in range(max_retries):
+        try:
+            # Get current policy to get ETag
+            try:
+                current_policy = cloudfront.get_response_headers_policy(Id=policy_id)
+                etag = current_policy['ETag']
+            except ClientError as e:
+                code = e.response['Error']['Code']
+                if code in ('NoSuchResponseHeadersPolicy', 'NoSuchResource'):
+                    logger.info(f"Response headers policy {policy_id} not found, skipping deletion")
+                    return
+                raise
+
+            try:
+                cloudfront.delete_response_headers_policy(Id=policy_id, IfMatch=etag)
+                logger.info(f"Successfully deleted response headers policy: {policy_id}")
+                return
+            except ClientError as e:
+                code = e.response['Error']['Code']
+                
+                if code in ('NoSuchResponseHeadersPolicy', 'NoSuchResource'):
+                    logger.info(f"Response headers policy {policy_id} not found during deletion")
+                    return
+                elif code == 'ResponseHeadersPolicyInUse':
+                    logger.warning(f"Response headers policy {policy_id} is in use, retrying in {2 ** attempt} seconds")
+                    time.sleep(2 ** attempt)
+                    continue
+                elif code == 'PreconditionFailed':
+                    logger.warning(f"ETag mismatch for response headers policy {policy_id}, retrying")
+                    time.sleep(1)
+                    continue
+                else:
+                    logger.error(f"Error deleting response headers policy {policy_id}: {e}")
+                    raise
+                    
+        except Exception as e:
+            logger.error(f"Unexpected error deleting response headers policy {policy_id}: {e}")
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(2 ** attempt)
+    
+    logger.error(f"Failed to delete response headers policy {policy_id} after {max_retries} attempts")
+    raise Exception(f"Failed to delete response headers policy after {max_retries} attempts")
+
 def clean_distribution_config(config: dict) -> dict:
     """
     Clean up a CloudFront DistributionConfig dict before calling update_distribution:
@@ -528,6 +636,13 @@ def update_distribution(props):
         viewer_request_function_arn = props.get('ViewerRequestFunctionArn')
         if not viewer_request_function_arn:
             raise ValueError("ViewerRequestFunctionArn is required")
+        
+        # Get NoCachePolicy ID for protected content
+        nocache_policy_id = props.get('NoCachePolicyId')
+        if not nocache_policy_id:
+            logger.warning("NoCachePolicyId not provided, protected content will use default caching behavior")
+        else:
+            logger.info(f"Using NoCachePolicy ID: {nocache_policy_id}")
         
         logger.info(f"Updating distribution {distribution_id} with {len(protected_paths)} protected paths")
         
@@ -737,6 +852,11 @@ def update_distribution(props):
                 'TrustedSigners': {'Enabled': False, 'Quantity': 0},
                 'GrpcConfig': {'Enabled': False},
             }
+            
+            # Add NoCachePolicy if provided
+            if nocache_policy_id:
+                behavior['ResponseHeadersPolicyId'] = nocache_policy_id
+                logger.info(f"Applied NoCachePolicy {nocache_policy_id} to protected path {path_pattern}")
             
             new_behaviors.append(behavior)
         
@@ -983,6 +1103,9 @@ def update_resource(event, resource_type):
         return update_distribution(event['ResourceProperties'])
     elif resource_type == 'HostedZoneLookup':
         return lookup_hosted_zone(event['ResourceProperties'])
+    elif resource_type == 'ResponsePolicy':
+        # Response policies can be updated in place
+        return update_response_policy(event['ResourceProperties'], event.get('PhysicalResourceId'))
     else:
         # For other resources, recreate them
         try:
@@ -1015,6 +1138,8 @@ def delete_resource(event, resource_type):
             delete_origin_access_control_with_retry(physical_resource_id)
         elif resource_type in ['Function', 'PathRewriteFunction']:
             delete_function_with_retry(physical_resource_id)
+        elif resource_type == 'ResponsePolicy':
+            delete_response_policy_with_retry(physical_resource_id)
         elif resource_type == 'HostedZoneLookup':
             # No deletion needed for lookup operations
             pass
@@ -1153,6 +1278,26 @@ def delete_public_key_with_retry(public_key_id, max_retries=5):
             else:
                 logger.error(f"Unexpected error deleting public key {public_key_id}: {e}")
                 return
+
+def _build_security_headers_config(props: dict) -> dict:
+    sec = {
+        'ContentTypeOptions': {'Override': True},
+        'FrameOptions': {'FrameOption': 'DENY', 'Override': True},
+        'ReferrerPolicy': {'ReferrerPolicy': 'strict-origin-when-cross-origin', 'Override': True},
+        'StrictTransportSecurity': {
+            'AccessControlMaxAgeSec': 31536000,
+            'IncludeSubdomains': True,
+            'Preload': False,
+            'Override': True
+        }
+    }
+    csp = (props.get('ContentSecurityPolicy') or '').strip() if isinstance(props, dict) else ''
+    if csp:
+        sec['ContentSecurityPolicy'] = {
+            'ContentSecurityPolicy': csp,
+            'Override': True
+        }
+    return sec
 
 def _wait_for_distribution_deployed(distribution_id: str, timeout=900, interval=15):
     """Poll until the distribution is Deployed (max ~15 perc)."""

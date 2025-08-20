@@ -157,65 +157,43 @@ def create_signed_cookies():
         raise
 
 def sign_policy(policy_json):
-    """Sign the policy using RSA-SHA1 (CloudFront requirement)"""
+    """Sign the policy using RSA-SHA1 (CloudFront requirement) with native cryptography"""
     try:
-        # Try to get the private key from SSM
+        # Get the private key from SSM
         private_key_pem = get_private_key_from_ssm()
         
         if private_key_pem is None:
-            # Fallback to deterministic signature for demo
-            logger.warning("Using fallback signature method - not cryptographically secure")
-            return create_fallback_signature(policy_json)
+            raise ValueError("Private key not found in SSM Parameter Store")
         
-        # For production use with cryptography library (requires Lambda layer):
-        try:
-            from cryptography.hazmat.primitives import hashes, serialization
-            from cryptography.hazmat.primitives.asymmetric import padding
-            from cryptography.hazmat.backends import default_backend
-            
-            private_key = serialization.load_pem_private_key(
-                private_key_pem.encode(),
-                password=None,
-                backend=default_backend()
-            )
-            
-            signature = private_key.sign(
-                policy_json.encode(),
-                padding.PKCS1v15(),
-                hashes.SHA1()
-            )
-            
-            signature_b64 = base64.b64encode(signature).decode()
-            signature_b64 = signature_b64.replace('+', '-').replace('=', '_').replace('/', '~')
-            
-            logger.info("Created RSA signature successfully")
-            return signature_b64
-            
-        except ImportError:
-            logger.warning("Cryptography library not available, using fallback signature")
-            return create_fallback_signature(policy_json)
+        # Use Lambda runtime's native cryptography library
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import padding
+        from cryptography.hazmat.backends import default_backend
         
-    except Exception as e:
-        logger.error(f"Error signing policy: {str(e)}")
-        return create_fallback_signature(policy_json)
-
-def create_fallback_signature(policy_json):
-    """Create a fallback signature when private key is not available"""
-    try:
-        # Create a deterministic signature based on policy content
-        # This is for demo purposes only - not cryptographically secure
-        policy_hash = hashlib.sha256(policy_json.encode()).digest()
+        logger.info("Using native cryptography library for RSA-SHA1 signing")
         
-        # Create a base64-encoded signature (CloudFront-safe)
-        signature_b64 = base64.b64encode(policy_hash).decode()
+        private_key = serialization.load_pem_private_key(
+            private_key_pem.encode(),
+            password=None,
+            backend=default_backend()
+        )
+        
+        signature = private_key.sign(
+            policy_json.encode(),
+            padding.PKCS1v15(),
+            hashes.SHA1()
+        )
+        
+        signature_b64 = base64.b64encode(signature).decode()
         signature_b64 = signature_b64.replace('+', '-').replace('=', '_').replace('/', '~')
         
-        logger.debug(f"Created fallback signature: {signature_b64[:50]}...")
+        logger.info("Created production RSA-SHA1 signature successfully")
         return signature_b64
         
     except Exception as e:
-        logger.error(f"Error creating fallback signature: {str(e)}")
+        logger.error(f"Error signing policy: {str(e)}")
         raise
+
 
 def create_expired_cookies():
     """Create expired cookies to sign out user"""

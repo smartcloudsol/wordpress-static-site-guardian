@@ -12,7 +12,7 @@ Metadata:
     ReadmeUrl: README.md
     Labels: ['wordpress', 'cloudfront', 'static-site', 'authentication', 'security', 'signed-cookies']
     HomePageUrl: https://wpsuite.io
-    SemanticVersion: 1.0.0
+    SemanticVersion: 1.0.6
     SourceCodeUrl: https://github.com/smartcloudsol/wordpress-static-site-guardian
 
 Parameters:
@@ -155,7 +155,7 @@ Resources:
       CodeUri: src/
       Handler: cloudfront_manager.lambda_handler
       Description: 'Manages CloudFront resources not supported by SAR'
-      Timeout: 300
+      Timeout: 900
       Environment:
         Variables:
           STACK_NAME: !Ref AWS::StackName
@@ -191,6 +191,10 @@ Resources:
                 - cloudfront:UpdateOriginAccessControl
                 - cloudfront:DeleteOriginAccessControl
                 - cloudfront:GetOriginAccessControl
+                - cloudfront:CreateResponseHeadersPolicy
+                - cloudfront:UpdateResponseHeadersPolicy
+                - cloudfront:DeleteResponseHeadersPolicy
+                - cloudfront:GetResponseHeadersPolicy
                 - cloudfront:CreateDistribution
                 - cloudfront:UpdateDistribution
                 - cloudfront:GetDistribution
@@ -225,6 +229,14 @@ Resources:
       ResourceType: 'OriginAccessControl'
       Name: !Sub '${AWS::StackName}-OAC'
 
+  # Custom Resource for NoCachePolicy Response Headers Policy
+  NoCachePolicy:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt CloudFrontResourceManager.Arn
+      ResourceType: 'ResponsePolicy'
+      Name: !Sub '${AWS::StackName}-NoCachePolicy'
+
   # Custom Resource for CloudFront Function (Authentication)
   ViewerRequestFunction:
     Type: AWS::CloudFormation::CustomResource
@@ -256,6 +268,7 @@ Resources:
       ProtectedPaths: !Join [',', !Ref ProtectedPaths]
       ViewerRequestFunctionArn: !GetAtt ViewerRequestFunction.FunctionARN
       PathRewriteFunctionArn: !GetAtt PathRewriteFunction.FunctionARN
+      NoCachePolicyId: !GetAtt NoCachePolicy.ResponseHeadersPolicyId
 
   # CloudFront Distribution (using standard CloudFormation)
   CloudFrontDistribution:
@@ -285,6 +298,7 @@ Resources:
             ViewerProtocolPolicy: redirect-to-https
             CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled
             OriginRequestPolicyId: 88a5eaf4-2fd4-4709-b370-b4c650ea3fcf  # CORS-S3Origin
+            ResponseHeadersPolicyId: !GetAtt NoCachePolicy.ResponseHeadersPolicyId
             Compress: true
             TrustedKeyGroups:
               - !GetAtt CloudFrontKeyGroup.KeyGroupId
@@ -641,6 +655,12 @@ Outputs:
     Value: !GetAtt CloudFrontKeyGroup.KeyGroupId
     Export:
       Name: !Sub '${AWS::StackName}-KeyGroupId'
+
+  NoCachePolicyId:
+    Description: 'CloudFront Response Headers Policy ID for no-cache behavior'
+    Value: !GetAtt NoCachePolicy.ResponseHeadersPolicyId
+    Export:
+      Name: !Sub '${AWS::StackName}-NoCachePolicyId'
 
   ApiGatewayRegionalDomainName:
     Description: 'API Gateway Regional Domain Name'

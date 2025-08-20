@@ -98,7 +98,7 @@ EXAMPLES:
 PREREQUISITES:
     1. AWS CLI configured with appropriate permissions
     2. SSL certificate in ACM (us-east-1 region)
-    3. KMS key and public key generated (use generate-cloudfront-keypair.sh)
+    3. KMS key and public key generated (use scripts/generate-cloudfront-keypair.sh)
     4. Domain DNS ready for configuration
 
 EOF

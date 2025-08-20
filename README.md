@@ -39,7 +39,7 @@ Generate RSA key pairs using our provided script:
 
 ```bash
 # Download the key generation script
-curl -O https://github.com/smartcloudsol/wordpress-static-site-guardian/blob/main/generate-cloudfront-keypair.sh
+curl -O https://github.com/smartcloudsol/wordpress-static-site-guardian/blob/main/scripts/generate-cloudfront-keypair.sh
 chmod +x generate-cloudfront-keypair.sh
 
 # Generate keys and store in AWS
@@ -71,7 +71,7 @@ The easiest way to deploy WordPress Static Site Guardian is directly from the AW
 Use our automated deployment script for SAR applications:
 
 ```bash
-./deploy-from-sar.sh \
+./scripts/deploy-from-sar.sh \
   --stack-name my-wordpress-protection \
   --domain example.com \
   --api-domain api.example.com \
@@ -179,3 +179,33 @@ Typical monthly costs for a medium-traffic site:
 - **HTTPS Enforcement**: TLS 1.2+ required
 - **Edge Security**: Authentication logic runs at CloudFront edge locations
 - **Audit Trail**: Comprehensive CloudWatch logging (optional)
+
+## 📁 Project Structure
+
+This project is organized into logical folders for better maintainability:
+
+```
+├── 📁 src/                    # Lambda function source code
+├── 📁 scripts/                # Deployment and utility scripts  
+├── 📁 tests/                  # Validation and testing scripts
+├── 📄 template.yaml           # Main CloudFormation template
+└── 📄 README.md               # This documentation
+```
+
+For detailed folder structure and usage examples, see [FOLDER_STRUCTURE.md](FOLDER_STRUCTURE.md).
+
+### Quick Start Commands
+
+```bash
+# Generate RSA keys
+./scripts/generate-cloudfront-keypair.sh --name my-keys
+
+# Deploy from SAR
+./scripts/deploy-from-sar.sh --stack-name my-stack --domain example.com ...
+
+# Validate template
+./tests/validate-sam-template.sh --strict
+
+# Run comprehensive tests
+python3 tests/test_end_to_end.py
+```
