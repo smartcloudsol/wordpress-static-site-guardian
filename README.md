@@ -39,7 +39,7 @@ Generate RSA key pairs using our provided script:
 
 ```bash
 # Download the key generation script
-curl -O https://github.com/smartcloudsol/wordpress-static-site-guardian/blob/main/scripts/generate-cloudfront-keypair.sh
+curl -O https://raw.githubusercontent.com/smartcloudsol/wordpress-static-site-guardian/refs/heads/main/scripts/generate-cloudfront-keypair.sh
 chmod +x generate-cloudfront-keypair.sh
 
 # Generate keys and store in AWS

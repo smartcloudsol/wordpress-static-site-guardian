@@ -12,20 +12,20 @@ Metadata:
     ReadmeUrl: README.md
     Labels: ['wordpress', 'cloudfront', 'static-site', 'authentication', 'security', 'signed-cookies']
     HomePageUrl: https://wpsuite.io
-    SemanticVersion: 1.0.7
+    SemanticVersion: 1.0.9
     SourceCodeUrl: https://github.com/smartcloudsol/wordpress-static-site-guardian
 
 Parameters:
   DomainName:
     Type: String
     Description: 'Custom domain for CloudFront distribution (e.g., example.com)'
-    AllowedPattern: '^[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$'
+    AllowedPattern: '^[[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.]+[a-zA-Z]{2,}$'
     ConstraintDescription: 'Must be a valid domain name'
 
   ApiDomainName:
     Type: String
     Description: 'Custom domain for API Gateway (must be subdomain of CloudFront domain, e.g., api.example.com)'
-    AllowedPattern: '^[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$'
+    AllowedPattern: '^[[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.]+[a-zA-Z]{2,}$'
     ConstraintDescription: 'Must be a valid subdomain of the main domain'
 
   CertificateArn:
