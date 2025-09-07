@@ -64,8 +64,8 @@ OPTIONAL OPTIONS:
     -i, --signin-path PATH               Path for sign-in page (default: /signin)
     -e, --expiration-days DAYS           Cookie expiration in days (default: 30)
     -b, --s3-bucket-name NAME            Custom S3 bucket name (optional, auto-generated if not provided)
-    --not-found-page PATH                Custom 404 error page path (default: /404)
-    --forbidden-page PATH                Custom 403 error page path (default: /403)
+    --not-found-page PATH                Custom 404 error page path (relative to S3WWWRoot; do not include the S3WWWRoot prefix, e.g., /404-2/index.html)
+    --forbidden-page PATH                Custom 403 error page path (relative to S3WWWRoot; do not include the S3WWWRoot prefix, e.g., /403/index.html)
     --no-dns-records                     Skip creating Route53 DNS records (default: create records)
     -l, --enable-logging                 Enable detailed CloudWatch logging
     -r, --region REGION                  AWS region (default: us-east-1)

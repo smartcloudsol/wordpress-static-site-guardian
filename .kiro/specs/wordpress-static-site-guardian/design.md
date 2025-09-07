@@ -329,7 +329,7 @@ CacheBehaviors:
 **Implementation**:
 - **Optional Parameters**: `NotFoundPagePath` and `ForbiddenPagePath` default to empty strings
 - **Conditional Logic**: CloudFormation conditions (`HasNotFoundPage`, `HasForbiddenPage`) determine error response configuration
-- **S3 Origin Mapping**: Error page paths must be specified as S3 keys under the `S3WWWRoot` prefix
+- **S3 Origin Mapping**: Error page paths are specified **relative to S3WWWRoot**; the template automatically prefixes them at deploy time
 - **Path Format**: Error pages are fetched from S3 origin, not from routed public URLs
 - **Graceful Degradation**: When error pages are not configured, CloudFront uses default error handling
 

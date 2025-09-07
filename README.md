@@ -130,11 +130,11 @@ Upload your WordPress static files to the S3 bucket, including:
 
 Error pages are **optional**. If you want custom 404 or 403 pages:
 
-**Important**: Error page paths must be specified as **S3 origin keys under the S3WWWRoot prefix**, not as public URLs.
+**Important**: Specify error page paths **relative to** the S3WWWRoot folder (do **not** include the S3WWWRoot prefix).
 
 **Example**: If WordPress had a custom 404 page at `/404-2`, Simply Static would export it as `/404-2/index.html`. The correct parameter value is:
 ```
-/<S3WWWRoot>/404-2/index.html
+/404-2/index.html
 ```
 
 This is because CloudFront error pages are fetched **from the origin (S3)**, not from a routed public URL.

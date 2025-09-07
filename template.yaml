@@ -12,7 +12,7 @@ Metadata:
     ReadmeUrl: README.md
     Labels: ['wordpress', 'cloudfront', 'static-site', 'authentication', 'security', 'signed-cookies']
     HomePageUrl: https://wpsuite.io
-    SemanticVersion: 1.0.10
+    SemanticVersion: 1.0.11
     SourceCodeUrl: https://github.com/smartcloudsol/wordpress-static-site-guardian
 
 Parameters:
@@ -91,14 +91,14 @@ Parameters:
   NotFoundPagePath:
     Type: String
     Default: ''
-    Description: 'Optional path to custom 404 error page as S3 key under S3WWWRoot prefix (e.g., /404-custom for /<S3WWWRoot>/404-custom/index.html). Leave empty to disable custom 404 page.'
+    Description: 'Optional path to custom 404 error page **relative to** S3WWWRoot (do **not** include the S3WWWRoot prefix). Example: if the page /404-2 is exported as /404-2/index.html, set **/404-2/index.html**.'
     AllowedPattern: '^$|^/[a-zA-Z0-9/_.-]*$'
     ConstraintDescription: 'Must be empty or a valid HTML file path starting with /'
 
   ForbiddenPagePath:
     Type: String
     Default: ''
-    Description: 'Optional path to custom 403 error page as S3 key under S3WWWRoot prefix (e.g., /403-custom for /<S3WWWRoot>/403-custom/index.html). Leave empty to disable custom 403 page.'
+    Description: 'Optional path to custom 403 error page **relative to** S3WWWRoot (do **not** include the S3WWWRoot prefix). Example: **/403-custom/index.html**.'
     AllowedPattern: '^$|^/[a-zA-Z0-9/_.-]*$'
     ConstraintDescription: 'Must be empty or a valid HTML file path starting with /'
 
