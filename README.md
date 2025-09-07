@@ -98,12 +98,12 @@ Use our automated deployment script for SAR applications:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| **ProtectedPaths** | `/dashboard,/profile,/admin` | Comma-separated paths to protect |
+| **ProtectedPaths** | *(no default)* | Comma-separated paths to protect (e.g., `/dashboard,/profile`) |
 | **SigninPagePath** | `/signin` | Path to redirect unauthenticated users |
 | **CookieExpirationDays** | `30` | Cookie lifetime (1-365 days) |
 | **S3BucketName** | *(auto-generated)* | Custom S3 bucket name (optional) |
-| **NotFoundPagePath** | `/404` | Custom 404 error page path |
-| **ForbiddenPagePath** | `/403` | Custom 403 error page path |
+| **NotFoundPagePath** | *(empty)* | Optional custom 404 error page path (see Error Pages section) |
+| **ForbiddenPagePath** | *(empty)* | Optional custom 403 error page path (see Error Pages section) |
 | **CreateDNSRecords** | `true` | Automatically create Route53 DNS records |
 | **EnableDetailedLogging** | `false` | Enable CloudWatch logging and monitoring |
 
@@ -121,19 +121,37 @@ After successful deployment:
 ### 2. Upload Static Files
 
 > **Important:** Upload your static WordPress site into the `<wwwroot>/` prefix of the created S3 bucket. The CloudFront and Lambda code expect all static content to be placed under `s3://<bucket-name>/<wwwroot>/`. Do not upload files directly to the bucket root.
+
 Upload your WordPress static files to the S3 bucket, including:
 - **Static Site Content**: All your WordPress-generated files
-- **Error Pages**: Custom 404 and 403 pages (default: `/404`, `/403`)
 - **Protected Content**: Files for protected paths in their respective directories
 
-### 3. Test Protection
+### 3. Optional Error Pages Configuration
+
+Error pages are **optional**. If you want custom 404 or 403 pages:
+
+**Important**: Error page paths must be specified as **S3 origin keys under the S3WWWRoot prefix**, not as public URLs.
+
+**Example**: If WordPress had a custom 404 page at `/404-2`, Simply Static would export it as `/404-2/index.html`. The correct parameter value is:
+```
+/<S3WWWRoot>/404-2/index.html
+```
+
+This is because CloudFront error pages are fetched **from the origin (S3)**, not from a routed public URL.
+
+**Configuration**:
+- Leave `NotFoundPagePath` and `ForbiddenPagePath` empty to disable custom error pages
+- If provided, ensure the files exist in your S3 bucket at the specified paths
+- The system will only configure error responses for non-empty paths
+
+### 4. Test Protection
 1. **Public Access**: Visit public pages to ensure they load correctly
 2. **Protected Paths**: Visit protected paths - should redirect to your sign-in page
 3. **Error Pages**: Test 404 and 403 error handling
 4. **Cookie Issuance**: Test the API Gateway endpoint for cookie generation
 5. **Authenticated Access**: Verify signed cookies grant access to protected content
 
-### 4. Integrate with Authentication
+### 5. Integrate with Authentication
 Configure your authentication system ([Gatey Pro](https://wpsuite.io) API Settings and Sign-in/Sign-out Hooks, custom auth, etc.) to call the cookie issuance endpoint after successful login.
 
 ## 📊 Monitoring & Troubleshooting

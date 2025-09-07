@@ -31,13 +31,13 @@ API_DOMAIN_NAME=""
 CERTIFICATE_ARN=""
 KMS_KEY_ID=""
 PUBLIC_KEY_CONTENT=""
-PROTECTED_PATHS="/dashboard,/profile,/admin"
+PROTECTED_PATHS=""
 SIGNIN_PAGE_PATH="/signin"
 COOKIE_EXPIRATION_DAYS=30
 S3_BUCKET_NAME=""
 S3_WWWROOT_PREFIX="wwwroot"
-NOT_FOUND_PAGE_PATH="/404"
-FORBIDDEN_PAGE_PATH="/403"
+NOT_FOUND_PAGE_PATH=""
+FORBIDDEN_PAGE_PATH=""
 CREATE_DNS_RECORDS="true"
 REGION="us-east-1"
 APPLICATION_ID="arn:aws:serverlessrepo:us-east-1:123456789012:applications/wordpress-static-site-guardian"
@@ -60,7 +60,7 @@ REQUIRED OPTIONS:
     -w, --s3-wwwroot-prefix PREFIX       Non-empty S3 prefix that does not start or end with '/' (required)
 
 OPTIONAL OPTIONS:
-    -p, --protected-paths PATHS          Comma-separated protected paths (default: /dashboard,/profile,/admin)
+    -p, --protected-paths PATHS          Comma-separated protected paths (required, e.g., /dashboard,/profile)
     -i, --signin-path PATH               Path for sign-in page (default: /signin)
     -e, --expiration-days DAYS           Cookie expiration in days (default: 30)
     -b, --s3-bucket-name NAME            Custom S3 bucket name (optional, auto-generated if not provided)

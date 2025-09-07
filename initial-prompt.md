@@ -56,7 +56,7 @@ Your task is to generate an AWS CloudFormation template that sets up the infrast
 
 ## Parameters
 
-- `ProtectedPaths`: List<String> – Paths to secure (e.g., ["/dashboard", "/profile", "/admin"]).  
+- `ProtectedPaths`: List<String> – Paths to secure (no default, examples: ["/dashboard", "/profile"]).  
 
 - `CognitoRefreshTokenValidity`: Integer – Validity in days, to match Cognito AppClient refresh token expiration.  
 

@@ -12,7 +12,7 @@ Metadata:
     ReadmeUrl: README.md
     Labels: ['wordpress', 'cloudfront', 'static-site', 'authentication', 'security', 'signed-cookies']
     HomePageUrl: https://wpsuite.io
-    SemanticVersion: 1.0.9
+    SemanticVersion: 1.0.10
     SourceCodeUrl: https://github.com/smartcloudsol/wordpress-static-site-guardian
 
 Parameters:
@@ -36,8 +36,7 @@ Parameters:
 
   ProtectedPaths:
     Type: CommaDelimitedList
-    Default: '/dashboard,/profile,/admin'
-    Description: 'List of paths to protect with signed cookies (comma-separated)'
+    Description: 'List of paths to protect with signed cookies (comma-separated, e.g., /dashboard,/profile)'
     ConstraintDescription: 'Comma-separated list of URL paths starting with /'
 
   SigninPagePath:
@@ -91,17 +90,17 @@ Parameters:
 
   NotFoundPagePath:
     Type: String
-    Default: '/404'
-    Description: 'Path to the custom 404 error page in your S3 bucket'
-    AllowedPattern: '^/[a-zA-Z0-9/_.-]*$'
-    ConstraintDescription: 'Must be a valid HTML file path starting with /'
+    Default: ''
+    Description: 'Optional path to custom 404 error page as S3 key under S3WWWRoot prefix (e.g., /404-custom for /<S3WWWRoot>/404-custom/index.html). Leave empty to disable custom 404 page.'
+    AllowedPattern: '^$|^/[a-zA-Z0-9/_.-]*$'
+    ConstraintDescription: 'Must be empty or a valid HTML file path starting with /'
 
   ForbiddenPagePath:
     Type: String
-    Default: '/403'
-    Description: 'Path to the custom 403 error page in your S3 bucket'
-    AllowedPattern: '^/[a-zA-Z0-9/_.-]*$'
-    ConstraintDescription: 'Must be a valid HTML file path starting with /'
+    Default: ''
+    Description: 'Optional path to custom 403 error page as S3 key under S3WWWRoot prefix (e.g., /403-custom for /<S3WWWRoot>/403-custom/index.html). Leave empty to disable custom 403 page.'
+    AllowedPattern: '^$|^/[a-zA-Z0-9/_.-]*$'
+    ConstraintDescription: 'Must be empty or a valid HTML file path starting with /'
 
   CreateDNSRecords:
     Type: String
@@ -113,6 +112,8 @@ Conditions:
   EnableLogging: !Equals [!Ref EnableDetailedLogging, 'true']
   UseCustomBucketName: !Not [!Equals [!Ref S3BucketName, '']]
   CreateDNS: !Equals [!Ref CreateDNSRecords, 'true']
+  HasNotFoundPage: !Not [!Equals [!Ref NotFoundPagePath, '']]
+  HasForbiddenPage: !Not [!Equals [!Ref ForbiddenPagePath, '']]
 
 Globals:
   Function:
@@ -305,15 +306,29 @@ Resources:
             FunctionAssociations:
               - EventType: viewer-request
                 FunctionARN: !GetAtt PathRewriteFunction.FunctionARN
-        CustomErrorResponses:
-          - ErrorCode: 404
-            ResponseCode: 404
-            ResponsePagePath: !Sub '/${S3WWWRoot}${NotFoundPagePath}'
-            ErrorCachingMinTTL: 300
-          - ErrorCode: 403
-            ResponseCode: 403
-            ResponsePagePath: !Sub '/${S3WWWRoot}${ForbiddenPagePath}'
-            ErrorCachingMinTTL: 300
+        CustomErrorResponses: !If
+          - HasNotFoundPage
+          - !If
+            - HasForbiddenPage
+            - - ErrorCode: 404
+                ResponseCode: 404
+                ResponsePagePath: !Sub '/${S3WWWRoot}${NotFoundPagePath}'
+                ErrorCachingMinTTL: 300
+              - ErrorCode: 403
+                ResponseCode: 403
+                ResponsePagePath: !Sub '/${S3WWWRoot}${ForbiddenPagePath}'
+                ErrorCachingMinTTL: 300
+            - - ErrorCode: 404
+                ResponseCode: 404
+                ResponsePagePath: !Sub '/${S3WWWRoot}${NotFoundPagePath}'
+                ErrorCachingMinTTL: 300
+          - !If
+            - HasForbiddenPage
+            - - ErrorCode: 403
+                ResponseCode: 403
+                ResponsePagePath: !Sub '/${S3WWWRoot}${ForbiddenPagePath}'
+                ErrorCachingMinTTL: 300
+            - !Ref AWS::NoValue
         Enabled: true
         DefaultRootObject: index.html
         HttpVersion: http2
@@ -685,7 +700,7 @@ Outputs:
     Description: 'Next steps to complete the setup'
     Value: !Sub |
       1. Upload your static WordPress files to S3 bucket: ${StaticSiteBucket}/${S3WWWRoot}
-      2. Include custom error pages: ${NotFoundPagePath} and ${ForbiddenPagePath}
+      2. Include custom error pages (if configured): ${NotFoundPagePath} and ${ForbiddenPagePath}
       3. DNS Configuration: Check CreateDNSRecords parameter (${CreateDNSRecords})
       4. Test cookie issuance via custom domain: https://${ApiDomainName}/issue-cookie
       5. Verify protected paths redirect unauthenticated users to ${SigninPagePath}

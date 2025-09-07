@@ -318,9 +318,26 @@ CacheBehaviors:
 - Expired cookies: Redirect to sign-in page for re-authentication
 
 **Path Processing Errors**:
-- Invalid path patterns: Serve 404 error page
-- Missing files: Serve custom 404 error page
-- Access denied: Serve custom 403 error page
+- Invalid path patterns: Serve 404 error page (if configured)
+- Missing files: Serve custom 404 error page (if configured)
+- Access denied: Serve custom 403 error page (if configured)
+
+### Conditional Error Page Handling
+
+**Strategy**: Error pages are optional and conditionally configured based on parameter values
+
+**Implementation**:
+- **Optional Parameters**: `NotFoundPagePath` and `ForbiddenPagePath` default to empty strings
+- **Conditional Logic**: CloudFormation conditions (`HasNotFoundPage`, `HasForbiddenPage`) determine error response configuration
+- **S3 Origin Mapping**: Error page paths must be specified as S3 keys under the `S3WWWRoot` prefix
+- **Path Format**: Error pages are fetched from S3 origin, not from routed public URLs
+- **Graceful Degradation**: When error pages are not configured, CloudFront uses default error handling
+
+**Configuration Logic**:
+- If both error pages are configured: Include both 404 and 403 custom error responses
+- If only 404 page is configured: Include only 404 custom error response
+- If only 403 page is configured: Include only 403 custom error response  
+- If neither page is configured: Omit custom error responses entirely (use `AWS::NoValue`)
 
 ### Lambda Function Error Handling
 

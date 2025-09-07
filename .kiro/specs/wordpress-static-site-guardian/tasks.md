@@ -26,7 +26,7 @@
   - Configure S3 origin with OAC integration
   - Set up custom domain with SSL certificate
   - Configure default cache behavior for public content
-  - Add custom error pages (404, 403)
+  - Add conditional custom error pages (404, 403) based on parameter configuration
   - _Requirements: 1.4, 1.5_
 
 - [x] 2.3 Create NoCachePolicy response policy custom resource
@@ -202,6 +202,14 @@
   - Test parameter validation and constraints
   - Validate resource dependencies and references
   - _Requirements: 11.4, 12.4_
+
+- [x] 11.3 Add tests for optional error pages and empty ProtectedPaths
+  - Test deployment with no error pages configured (both parameters empty)
+  - Test deployment with only 404 error page configured
+  - Test deployment with only 403 error page configured
+  - Test deployment with empty ProtectedPaths parameter
+  - Validate conditional CloudFormation logic works correctly
+  - _Requirements: 1.5, 1.6, 2.4_
 
 ## 12. Documentation and Deployment Scripts
 - [x] 12.1 Create comprehensive README documentation

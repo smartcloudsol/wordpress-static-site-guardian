@@ -18,7 +18,8 @@ The solution addresses the challenge faced by WordPress site owners who want to 
 2. WHEN static files are uploaded to the S3 bucket THEN they SHALL be accessible only through CloudFront distribution
 3. WHEN a CloudFront distribution is created THEN it SHALL use Origin Access Control (OAC) for secure S3 access
 4. WHEN the distribution is configured THEN it SHALL support custom domains with SSL certificates
-5. WHEN error conditions occur THEN the system SHALL serve custom 404 and 403 error pages
+5. WHEN error conditions occur AND custom error pages are configured THEN the system SHALL serve custom 404 and 403 error pages
+6. WHEN error page parameters are left empty THEN the system SHALL omit those error responses entirely
 6. WHEN logging is enabled THEN the system SHALL provide comprehensive CloudWatch monitoring
 
 ### Requirement 2: Authentication-Protected Content Areas
@@ -30,7 +31,7 @@ The solution addresses the challenge faced by WordPress site owners who want to 
 1. WHEN protected paths are configured THEN the system SHALL create CloudFront cache behaviors for each path pattern
 2. WHEN an unauthenticated user accesses a protected path THEN they SHALL be redirected to the sign-in page with return URL preservation
 3. WHEN a user has valid signed cookies THEN they SHALL access protected content transparently
-4. WHEN protected paths are defined THEN the system SHALL support configurable path patterns (e.g., /dashboard, /members, /courses)
+4. WHEN protected paths are defined THEN the system SHALL support configurable path patterns with no default values (examples: /dashboard, /members, /courses)
 5. WHEN path rewriting occurs THEN the system SHALL map protected paths to restricted internal paths for cache behavior routing
 
 ### Requirement 3: CloudFront Signed Cookie Authentication
