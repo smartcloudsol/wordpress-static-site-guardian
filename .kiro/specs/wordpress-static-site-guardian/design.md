@@ -4,7 +4,7 @@
 
 WordPress Static Site Guardian is a comprehensive AWS solution that enables static WordPress sites to maintain authentication-protected content areas while leveraging the performance and security benefits of CloudFront CDN. The system uses CloudFront signed cookies for edge-based authentication, ensuring optimal performance and security.
 
-The architecture consists of multiple AWS services working together: S3 for static hosting, CloudFront for global content delivery and authentication, API Gateway and Lambda for cookie management, and various supporting services for security, monitoring, and DNS management.
+The architecture consists of multiple AWS services working together: S3 for static hosting, CloudFront for global content delivery and authentication with Lambda@Edge for cookie management, and various supporting services for security, monitoring, and DNS management.
 
 ## Architecture
 
@@ -15,20 +15,19 @@ graph TB
     User[User Browser] --> CF[CloudFront Distribution]
     CF --> S3[S3 Static Site Bucket]
     CF --> CFFunc[CloudFront Functions]
+    CF --> LambdaEdge[Lambda@Edge Cookie Signing]
     
-    Auth[Authentication System] --> API[API Gateway]
-    API --> Lambda[Cookie Signing Lambda]
-    Lambda --> KMS[KMS Encrypted Keys]
-    Lambda --> SSM[SSM Parameter Store]
+    Auth[Authentication System] --> CF
+    LambdaEdge --> KMS[KMS Encrypted Keys]
+    LambdaEdge --> SSM[SSM Parameter Store]
+    LambdaEdge --> Cognito[Cognito JWKS]
     
     CF --> KeyGroup[CloudFront Key Group]
     KeyGroup --> PubKey[Public Key]
     
     Route53[Route53 DNS] --> CF
-    Route53 --> API
     
-    CW[CloudWatch] --> Lambda
-    CW --> API
+    CW[CloudWatch] --> LambdaEdge
 ```
 
 ### Component Architecture
@@ -44,8 +43,8 @@ graph TB
 - **CloudFront Functions**: Edge-based request processing for authentication and path rewriting
 
 #### 3. Cookie Management Layer
-- **API Gateway**: REST API with custom domain for cookie issuance
-- **Lambda Function**: Serverless cookie signing with native cryptography and KMS integration
+- **Lambda@Edge Function**: Edge-deployed cookie signing with JWT verification and native cryptography
+- **CloudFront Cache Behavior**: /issue-cookie* behavior with Lambda@Edge association
 - **KMS**: Secure private key encryption and management
 - **SSM Parameter Store**: Encrypted private key storage
 
@@ -88,11 +87,14 @@ graph TB
 
 **Cache Behaviors**:
 1. **Default Behavior**: Public content, no authentication required
-2. **Protected Path Behaviors**: Dynamically created for each protected path
+2. **Cookie Issuance Behavior**: `/issue-cookie*` path pattern with Lambda@Edge association
+   - GET/HEAD methods only with CachingDisabled policy
+   - Lambda@Edge function on viewer request for JWT verification and cookie signing
+3. **Protected Path Behaviors**: Dynamically created for each protected path
    - Requires signed cookies via trusted key groups
    - Uses viewer-request functions for authentication checks
    - Uses NoCachePolicy response policy for strict cache control
-3. **Restricted Path Behaviors**: Internal routing behaviors for authenticated content
+4. **Restricted Path Behaviors**: Internal routing behaviors for authenticated content
    - Uses NoCachePolicy response policy to prevent caching of sensitive content
 
 **Interface**:
@@ -140,45 +142,43 @@ graph TB
 - Input: CloudFront request events
 - Output: Modified request objects or redirect responses
 
-### API Gateway
+### Lambda@Edge Function (Cookie Signing)
 
-**Purpose**: RESTful endpoint for cookie issuance and management
+**Purpose**: Edge-deployed cookie signing with JWT verification and secure key management
 
 **Configuration**:
-- Custom domain (subdomain of main site)
-- Regional endpoint with SSL certificate
-- CORS support with credential handling
-- AWS IAM authentication required
-
-**Endpoints**:
-- `GET /issue-cookie`: Issues signed cookies for authenticated users
-- `OPTIONS /issue-cookie`: CORS preflight support
-
-**Interface**:
-- Input: IAM-signed HTTP requests
-- Output: HTTP responses with Set-Cookie headers
-
-### Lambda Function (Cookie Signing)
-
-**Purpose**: Serverless cookie signing with secure key management and native cryptography
+- Deployed to CloudFront edge locations via Lambda@Edge
+- Associated with `/issue-cookie*` cache behavior on viewer request
+- No environment variables (configuration embedded as constants)
+- GET/HEAD methods only with no body processing
 
 **Functionality**:
+- Verifies JWT Bearer tokens from Authorization header
+- Validates JWT signature using cached Cognito JWKS
+- Checks issuer, expiration, not-before, and audience claims
 - Retrieves encrypted private key from KMS/SSM
 - Uses Lambda runtime's native cryptography libraries for RSA-SHA1 signing
 - Generates CloudFront signed cookies with proper expiration
-- Handles both cookie issuance and expiration (sign-out)
+- Handles both cookie issuance (signin) and expiration (signout)
+- Returns host-only cookies without Domain attribute
 - Comprehensive error handling and logging
 
-**Environment Variables**:
-- `DOMAIN_NAME`: Cookie domain scope
-- `KEY_PAIR_ID`: CloudFront key pair identifier
-- `COOKIE_EXPIRATION_DAYS`: Cookie lifetime configuration
-- `PROTECTED_PATHS`: List of paths requiring authentication
-- `KMS_KEY_ID`: KMS key for private key decryption
+**JWT Verification**:
+- Supports both ID tokens (aud claim) and access tokens (client_id claim)
+- Validates token_use claim for 'id' or 'access'
+- Caches JWKS keys in memory for performance
+- Returns 401 with WWW-Authenticate header for invalid tokens
+
+**Configuration Constants** (embedded in code):
+- Cognito User Pool ID for issuer validation
+- Allowed App Client IDs for audience validation
+- CloudFront key pair identifier
+- Cookie lifetime configuration
+- Protected paths list for validation
 
 **Interface**:
-- Input: API Gateway events with authentication context
-- Output: HTTP responses with signed cookie headers
+- Input: CloudFront viewer request events with JWT Bearer tokens
+- Output: HTTP responses with Set-Cookie headers or 401/400 errors
 
 ### CloudFront Resource Manager Lambda
 
@@ -242,17 +242,25 @@ graph TB
 ```yaml
 ProtectedPaths:
   Type: CommaDelimitedList
-  Description: "Paths requiring authentication"
+  Description: "Paths requiring authentication (cannot include /issue-cookie)"
   Example: ["/dashboard", "/members", "/courses"]
+  AllowedPattern: "^(?!.*(?:^|,)/issue-cookie(?:$|,)).*$"
 
 CookieExpirationDays:
   Type: Number
   Description: "Cookie lifetime in days"
   Range: 1-365
 
+CognitoUserPoolId:
+  Type: String
+  Description: "Cognito User Pool ID for JWT issuer validation"
+
+CognitoAppClientIds:
+  Type: CommaDelimitedList
+  Description: "Allowed Cognito App Client IDs for JWT audience validation"
+
 DomainConfiguration:
   MainDomain: "example.com"
-  ApiDomain: "api.example.com"
   CertificateArn: "arn:aws:acm:us-east-1:..."
 ```
 
@@ -295,20 +303,6 @@ CacheBehaviors:
 - Timeout protection with graceful degradation
 - Proper PhysicalResourceId management
 - Delete operations always return SUCCESS to prevent stack deletion blocking
-
-### API Gateway Error Handling
-
-**HTTP Status Codes**:
-- `200 OK`: Successful cookie issuance
-- `400 Bad Request`: Invalid request parameters
-- `401 Unauthorized`: Missing or invalid IAM authentication
-- `403 Forbidden`: Insufficient permissions
-- `500 Internal Server Error`: Lambda function errors
-
-**CORS Error Handling**:
-- Preflight OPTIONS requests handled separately
-- Dynamic origin validation for security
-- Proper error response headers for browser compatibility
 
 ### CloudFront Function Error Handling
 
@@ -378,12 +372,6 @@ CacheBehaviors:
 6. Test protected content access with cookies (should succeed)
 7. Test cookie expiration and cleanup
 
-**API Gateway Testing**:
-- Test CORS preflight requests
-- Validate IAM authentication requirements
-- Test error responses and status codes
-- Verify custom domain functionality
-
 ### Performance Testing
 
 **CloudFront Performance**:
@@ -428,4 +416,3 @@ CacheBehaviors:
 - Test certificate requirements (us-east-1)
 - Validate DNS propagation
 - Test global CloudFront deployment
-- Verify regional API Gateway functionality

@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: 'WordPress Static Site Guardian - Protect static WordPress sites with CloudFront signed cookies, API Gateway, and Lambda functions'
+Description: 'WordPress Static Site Guardian - Protect static WordPress sites with CloudFront signed cookies and Lambda functions'
 
 Metadata:
   AWS::ServerlessRepo::Application:
@@ -11,8 +11,8 @@ Metadata:
     LicenseUrl: LICENSE
     ReadmeUrl: README.md
     Labels: ['wordpress', 'cloudfront', 'static-site', 'authentication', 'security', 'signed-cookies']
-    HomePageUrl: https://wpsuite.io
-    SemanticVersion: 1.0.11
+    HomePageUrl: https://kirodev.wpsuite.io
+    SemanticVersion: 1.1.0
     SourceCodeUrl: https://github.com/smartcloudsol/wordpress-static-site-guardian
 
 Parameters:
@@ -22,22 +22,27 @@ Parameters:
     AllowedPattern: '^[[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.]+[a-zA-Z]{2,}$'
     ConstraintDescription: 'Must be a valid domain name'
 
-  ApiDomainName:
-    Type: String
-    Description: 'Custom domain for API Gateway (must be subdomain of CloudFront domain, e.g., api.example.com)'
-    AllowedPattern: '^[[a-zA-Z0-9][a-zA-Z0-9-]{1,61}[a-zA-Z0-9]\.]+[a-zA-Z]{2,}$'
-    ConstraintDescription: 'Must be a valid subdomain of the main domain'
-
   CertificateArn:
     Type: String
     Description: 'ARN of the SSL certificate in ACM (must be in us-east-1 region for CloudFront)'
     AllowedPattern: '^arn:aws:acm:us-east-1:[0-9]{12}:certificate/[a-f0-9-]{36}$'
     ConstraintDescription: 'Must be a valid ACM certificate ARN in us-east-1 region'
 
+  CognitoUserPoolId:
+    Type: String
+    Description: 'Cognito User Pool ID for JWT issuer validation (e.g., us-east-1_abcdefghi)'
+    AllowedPattern: '^[a-zA-Z0-9-_]+_[a-zA-Z0-9]+$'
+    ConstraintDescription: 'Must be a valid Cognito User Pool ID format'
+
+  CognitoAppClientIds:
+    Type: CommaDelimitedList
+    Description: 'Comma-separated list of Cognito App Client IDs for JWT audience validation (e.g., 1a2b3c4d5e6f7g8h9i0j1k2l3m,2b3c4d5e6f7g8h9i0j1k2l3m4n)'
+    ConstraintDescription: 'Comma-separated list of valid Cognito App Client IDs'
+
   ProtectedPaths:
     Type: CommaDelimitedList
-    Description: 'List of paths to protect with signed cookies (comma-separated, e.g., /dashboard,/profile)'
-    ConstraintDescription: 'Comma-separated list of URL paths starting with /'
+    Description: 'List of paths to protect with signed cookies (comma-separated, e.g., /dashboard,/profile). Cannot include /issue-cookie path.'
+    ConstraintDescription: 'Comma-separated list of URL paths starting with /. Cannot include /issue-cookie or /issue-cookie*'
 
   SigninPagePath:
     Type: String
@@ -294,6 +299,20 @@ Resources:
             - EventType: viewer-request
               FunctionARN: !GetAtt ViewerRequestFunction.FunctionARN
         CacheBehaviors:
+          - PathPattern: '/issue-cookie*'
+            TargetOriginId: S3Origin
+            ViewerProtocolPolicy: redirect-to-https
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad  # CachingDisabled
+            AllowedMethods:
+              - GET
+              - HEAD
+            CachedMethods:
+              - GET
+              - HEAD
+            Compress: false
+            LambdaFunctionAssociations:
+              - EventType: viewer-request
+                LambdaFunctionARN: !GetAtt CookieSigningFunction.Arn
           - PathPattern: '/restricted*'
             TargetOriginId: S3Origin
             ViewerProtocolPolicy: redirect-to-https
@@ -391,18 +410,12 @@ Resources:
   CookieSigningFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: !Sub '${AWS::StackName}-cookie-signing'
+      FunctionName: !Sub '${AWS::StackName}-cookie-signing-edge'
       CodeUri: src/
       Handler: lambda_function.lambda_handler
-      Description: 'Issues and manages CloudFront signed cookies for protected content access'
-      Environment:
-        Variables:
-          DOMAIN_NAME: !Ref DomainName
-          KEY_PAIR_ID: !GetAtt CloudFrontPublicKey.PublicKeyId
-          COOKIE_EXPIRATION_DAYS: !Ref CookieExpirationDays
-          PROTECTED_PATHS: !Join [',', !Ref ProtectedPaths]
-          KMS_KEY_ID: !Ref KmsKeyId
-          AWS_REGION_NAME: !Ref AWS::Region
+      Description: 'Lambda@Edge function for issuing CloudFront signed cookies with JWT authentication'
+      # Lambda@Edge functions cannot use environment variables
+      # Configuration is embedded in the function code during deployment
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -411,7 +424,9 @@ Resources:
                 - logs:CreateLogGroup
                 - logs:CreateLogStream
                 - logs:PutLogEvents
-              Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*'
+              Resource: 
+                - !Sub 'arn:aws:logs:us-east-1:${AWS::AccountId}:log-group:/aws/lambda/*'
+                - !Sub 'arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/lambda/us-east-1.*'
             - Effect: Allow
               Action:
                 - kms:Decrypt
@@ -423,114 +438,6 @@ Resources:
                 - ssm:GetParameters
               Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudfront/private-key/*'
 
-
-  # API Gateway Custom Domain
-  ApiGatewayDomainName:
-    Type: AWS::ApiGateway::DomainName
-    Properties:
-      DomainName: !Ref ApiDomainName
-      RegionalCertificateArn: !Ref CertificateArn
-      EndpointConfiguration:
-        Types:
-          - REGIONAL
-      SecurityPolicy: TLS_1_2
-
-  # API Gateway REST API
-  ServerlessRestApi:
-    Type: AWS::ApiGateway::RestApi
-    Properties:
-      Name: !Sub '${AWS::StackName}-api'
-      Description: 'API for WordPress Static Site Guardian cookie issuance'
-      EndpointConfiguration:
-        Types:
-          - REGIONAL
-
-  # API Gateway Deployment
-  ApiGatewayDeployment:
-    Type: AWS::ApiGateway::Deployment
-    DependsOn:
-      - ApiGatewayGetMethod
-      - ApiGatewayOptionsMethod
-    Properties:
-      RestApiId: !Ref ServerlessRestApi
-      StageName: Prod
-
-  # Lambda Permission for API Gateway
-  LambdaApiGatewayPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref CookieSigningFunction
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ServerlessRestApi}/*/*'
-
-  # API Gateway Method for OPTIONS (CORS preflight)
-  ApiGatewayOptionsMethod:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      RestApiId: !Ref ServerlessRestApi
-      ResourceId: !Ref ApiGatewayResource
-      HttpMethod: OPTIONS
-      AuthorizationType: NONE
-      RequestParameters:
-        method.request.header.origin: true
-      Integration:
-        Type: MOCK
-        IntegrationHttpMethod: POST
-        PassthroughBehavior: NEVER
-        RequestTemplates:
-          application/json: |
-            {"statusCode": 200}
-            $input.json("$")
-            #set($origin = $input.params("origin"))
-            #set($context.responseOverride.header.Access-Control-Allow-Origin="$origin")
-            #set($context.responseOverride.header.Access-Control-Allow-Credentials="true")
-        IntegrationResponses:
-          - StatusCode: 200
-            ResponseParameters:
-              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Amz-Security-Token'"
-              method.response.header.Access-Control-Allow-Methods: "'GET,OPTIONS'"
-              method.response.header.Access-Control-Allow-Credentials: "'true'"
-      MethodResponses:
-        - StatusCode: 200
-          ResponseParameters:
-            method.response.header.Access-Control-Allow-Headers: false
-            method.response.header.Access-Control-Allow-Methods: false
-            method.response.header.Access-Control-Allow-Credentials: false
-
-  # API Gateway Resource for /issue-cookie
-  ApiGatewayResource:
-    Type: AWS::ApiGateway::Resource
-    Properties:
-      RestApiId: !Ref ServerlessRestApi
-      ParentId: !GetAtt ServerlessRestApi.RootResourceId
-      PathPart: issue-cookie
-
-  # API Gateway Method for GET /issue-cookie
-  ApiGatewayGetMethod:
-    Type: AWS::ApiGateway::Method
-    Properties:
-      RestApiId: !Ref ServerlessRestApi
-      ResourceId: !Ref ApiGatewayResource
-      HttpMethod: GET
-      AuthorizationType: AWS_IAM
-      Integration:
-        Type: AWS_PROXY
-        IntegrationHttpMethod: POST
-        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${CookieSigningFunction.Arn}/invocations'
-        Credentials: !Ref AWS::NoValue
-        IntegrationResponses:
-          - StatusCode: 200
-
-  # API Gateway Base Path Mapping
-  ApiGatewayBasePathMapping:
-    Type: AWS::ApiGateway::BasePathMapping
-    DependsOn: ApiGatewayDeployment
-    Properties:
-      DomainName: !Ref ApiGatewayDomainName
-      RestApiId: !Ref ServerlessRestApi
-      Stage: Prod
-
   # Route53 Hosted Zone Lookup
   HostedZoneLookup:
     Type: AWS::CloudFormation::CustomResource
@@ -539,18 +446,6 @@ Resources:
       ServiceToken: !GetAtt CloudFrontResourceManager.Arn
       ResourceType: 'HostedZoneLookup'
       DomainName: !Ref DomainName
-
-  # Route53 DNS Records
-  ApiDNSRecord:
-    Type: AWS::Route53::RecordSet
-    Condition: CreateDNS
-    Properties:
-      HostedZoneId: !GetAtt HostedZoneLookup.HostedZoneId
-      Name: !Ref ApiDomainName
-      Type: A
-      AliasTarget:
-        DNSName: !GetAtt ApiGatewayDomainName.RegionalDomainName
-        HostedZoneId: !GetAtt ApiGatewayDomainName.RegionalHostedZoneId
 
   WWWDNSRecord:
     Type: AWS::Route53::RecordSet
@@ -597,8 +492,8 @@ Resources:
                 ],
                 "period": 300,
                 "stat": "Sum",
-                "region": "${AWS::Region}",
-                "title": "Lambda Function Metrics"
+                "region": "us-east-1",
+                "title": "Lambda@Edge Function Metrics (us-east-1)"
               }
             },
             {
@@ -609,14 +504,28 @@ Resources:
               "height": 6,
               "properties": {
                 "metrics": [
-                  [ "AWS/ApiGateway", "Count", "ApiName", "${AWS::StackName}" ],
-                  [ ".", "4XXError", ".", "." ],
-                  [ ".", "5XXError", ".", "." ]
+                  [ "AWS/CloudFront", "Requests", "DistributionId", "${CloudFrontDistribution}" ],
+                  [ ".", "BytesDownloaded", ".", "." ],
+                  [ ".", "4xxErrorRate", ".", "." ],
+                  [ ".", "5xxErrorRate", ".", "." ]
                 ],
                 "period": 300,
                 "stat": "Sum",
                 "region": "${AWS::Region}",
-                "title": "API Gateway Metrics"
+                "title": "CloudFront Distribution Metrics"
+              }
+            },
+            {
+              "type": "log",
+              "x": 0,
+              "y": 6,
+              "width": 24,
+              "height": 6,
+              "properties": {
+                "query": "SOURCE '/aws/lambda/us-east-1.${CookieSigningFunction}'\n| fields @timestamp, @message\n| filter @message like /ERROR/\n| sort @timestamp desc\n| limit 100",
+                "region": "us-east-1",
+                "title": "Lambda@Edge Error Logs",
+                "view": "table"
               }
             }
           ]
@@ -647,23 +556,11 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-CloudFrontDomain'
 
-  ApiGatewayId:
-    Description: 'API Gateway ID'
-    Value: !Ref ServerlessRestApi
-    Export:
-      Name: !Sub '${AWS::StackName}-ApiGatewayId'
-
-  ApiGatewayInvokeUrl:
-    Description: 'API Gateway Invoke URL for cookie issuance'
-    Value: !Sub 'https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/issue-cookie'
-    Export:
-      Name: !Sub '${AWS::StackName}-ApiGatewayUrl'
-
-  LambdaFunctionArn:
-    Description: 'Lambda Function ARN for cookie signing'
+  LambdaEdgeFunctionArn:
+    Description: 'Lambda@Edge Function ARN for cookie signing with JWT authentication'
     Value: !GetAtt CookieSigningFunction.Arn
     Export:
-      Name: !Sub '${AWS::StackName}-LambdaArn'
+      Name: !Sub '${AWS::StackName}-LambdaEdgeArn'
 
   CloudFrontKeyGroupId:
     Description: 'CloudFront Key Group ID for signed cookies'
@@ -676,18 +573,6 @@ Outputs:
     Value: !GetAtt NoCachePolicy.ResponseHeadersPolicyId
     Export:
       Name: !Sub '${AWS::StackName}-NoCachePolicyId'
-
-  ApiGatewayRegionalDomainName:
-    Description: 'API Gateway Regional Domain Name'
-    Value: !GetAtt ApiGatewayDomainName.RegionalDomainName
-    Export:
-      Name: !Sub '${AWS::StackName}-ApiGatewayRegionalDomain'
-
-  ApiGatewayRegionalHostedZoneId:
-    Description: 'API Gateway Regional Hosted Zone ID'
-    Value: !GetAtt ApiGatewayDomainName.RegionalHostedZoneId
-    Export:
-      Name: !Sub '${AWS::StackName}-ApiGatewayHostedZoneId'
 
   Route53HostedZoneId:
     Condition: CreateDNS
@@ -702,16 +587,18 @@ Outputs:
       1. Upload your static WordPress files to S3 bucket: ${StaticSiteBucket}/${S3WWWRoot}
       2. Include custom error pages (if configured): ${NotFoundPagePath} and ${ForbiddenPagePath}
       3. DNS Configuration: Check CreateDNSRecords parameter (${CreateDNSRecords})
-      4. Test cookie issuance via custom domain: https://${ApiDomainName}/issue-cookie
-      5. Verify protected paths redirect unauthenticated users to ${SigninPagePath}
-      6. Test error pages by accessing non-existent URLs
+      4. Configure Cognito User Pool and App Clients for JWT authentication
+      5. Test cookie issuance via main domain: https://${DomainName}/issue-cookie?action=signin
+      6. Verify protected paths redirect unauthenticated users to ${SigninPagePath}
+      7. Test error pages by accessing non-existent URLs
       
       S3 Bucket: ${StaticSiteBucket}
       S3 WWWRoot Prefix: ${S3WWWRoot}
       CloudFront Domain: ${CloudFrontDistribution.DomainName}
-      API Gateway Domain: ${ApiGatewayDomainName.RegionalDomainName}
+      Cookie Endpoint: https://${DomainName}/issue-cookie
+      Authentication: JWT Bearer token required for cookie issuance
 
-  MonitoringDashboard:
+  MonitoringDashboardUrl:
     Condition: EnableLogging
-    Description: 'CloudWatch Dashboard for monitoring'
+    Description: 'CloudWatch Dashboard URL for monitoring'
     Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${AWS::StackName}-monitoring'

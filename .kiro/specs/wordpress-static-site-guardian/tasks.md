@@ -81,45 +81,65 @@
   - Handle function publishing and CloudFormation lifecycle
   - _Requirements: 6.5, 11.3_
 
-## 5. API Gateway and Cookie Management
-- [x] 5.1 Create API Gateway REST API with custom domain
-  - Set up regional API Gateway with custom domain
-  - Configure SSL certificate for API domain
-  - Implement base path mapping for clean URLs
-  - _Requirements: 4.4, 8.3_
+## 5. Lambda@Edge Cookie Management Migration
+- [x] 5.1 Remove API Gateway infrastructure from template
+  - Delete ApiDomainName parameter from template parameters section
+  - Remove ApiGatewayDomainName, ServerlessRestApi, and related API Gateway resources
+  - Remove API Gateway deployment, methods, and base path mapping resources
+  - Remove Lambda permission for API Gateway invocation
+  - Remove API Gateway DNS record creation (ApiDNSRecord)
+  - Remove API Gateway-related outputs (ApiGatewayId, ApiGatewayInvokeUrl, etc.)
+  - Remove API Gateway monitoring dashboard widgets from MonitoringDashboard
+  - _Requirements: 4.1, 8.5_
 
-- [x] 5.2 Implement GET /issue-cookie endpoint
-  - Create API Gateway method with AWS IAM authentication
-  - Configure Lambda proxy integration
-  - Set up proper error handling and status codes
-  - _Requirements: 4.1, 4.2_
+- [x] 5.2 Add Cognito integration parameters to template
+  - Add CognitoUserPoolId parameter for JWT issuer validation
+  - Add CognitoAppClientIds parameter (CommaDelimitedList) for audience validation
+  - Update ProtectedPaths AllowedPattern regex to reject /issue-cookie inclusion
+  - Add parameter validation constraints and descriptions
+  - _Requirements: 4.6, 5.7_
 
-- [x] 5.3 Add CORS support for cookie API
-  - Implement OPTIONS method for CORS preflight
-  - Configure dynamic origin validation for security
-  - Set up proper CORS headers with credential support
-  - Add request templates for CORS handling
-  - _Requirements: 4.3, 10.3_
+- [x] 5.3 Create /issue-cookie* CloudFront cache behavior in distribution
+  - Add cache behavior with PathPattern: /issue-cookie*
+  - Configure AllowedMethods: GET, HEAD only (no POST, no OPTIONS)
+  - Set CachePolicyId to CachingDisabled managed policy (4135ea2d-6df8-44a3-9df3-4b5a84be39ad)
+  - Associate Lambda@Edge function on viewer request event
+  - Add to CloudFront distribution configuration in template
+  - _Requirements: 4.1, 4.5_
 
-## 6. Lambda Function for Cookie Signing
-- [x] 6.1 Implement core cookie signing functionality
-  - Create Lambda function with KMS and SSM integration
-  - Implement RSA-SHA1 signature generation for CloudFront cookies
-  - Add proper cookie formatting and expiration handling
-  - _Requirements: 5.2, 3.2, 3.3_
+## 6. Lambda@Edge Function for Cookie Signing
+- [x] 6.1 Convert existing Lambda function to Lambda@Edge compatible
+  - Modify src/lambda_function.py for Lambda@Edge deployment requirements
+  - Remove all environment variables and embed configuration as constants in code
+  - Update function handler to process CloudFront viewer request events
+  - Add Lambda@Edge IAM role and permissions for us-east-1 deployment
+  - Configure function for Lambda@Edge association in template
+  - _Requirements: 5.1, 5.6, 5.7_
 
-- [x] 6.2 Implement native cryptography support for production RSA signing
-  - Use Lambda runtime's built-in cryptography libraries for proper RSA-SHA1 signatures
-  - Replace fallback signature method with production-ready RSA signing
-  - Test signature validation with CloudFront
-  - Remove dependency on external Lambda layers
-  - _Requirements: 5.2, 3.2, 7.1, 13.1, 13.2, 13.3_
+- [x] 6.2 Implement JWT Bearer token authentication in Lambda@Edge
+  - Add JWT parsing from Authorization header (Bearer token format)
+  - Implement JWT signature verification using cached Cognito JWKS endpoint
+  - Validate JWT issuer claim against configured Cognito User Pool ID
+  - Validate JWT expiration, not-before, and audience claims
+  - Support both ID tokens (aud claim) and access tokens (client_id claim)
+  - Return 401 with WWW-Authenticate header for invalid tokens
+  - Cache JWKS keys in memory for performance optimization
+  - _Requirements: 5.7, 4.2_
 
-- [x] 6.3 Configure Lambda IAM permissions
-  - Set up least privilege IAM role for Lambda function
-  - Add KMS decrypt permissions for private key access
-  - Configure SSM parameter read permissions
-  - _Requirements: 6.1, 5.3, 7.5_
+- [x] 6.3 Implement query string action handling in Lambda@Edge
+  - Parse action parameter from query string (signin/signout actions)
+  - Return 204 No Content for successful signin with host-only cookies
+  - Expire all three CloudFront cookies for signout action (Max-Age=0)
+  - Include Cache-Control: no-store header in all responses
+  - Handle missing or invalid action parameters gracefully
+  - _Requirements: 4.5, 5.5_
+
+- [x] 6.4 Add protected path validation in Lambda@Edge
+  - Check if /issue-cookie appears in embedded protected paths configuration
+  - Return 400 Bad Request if /issue-cookie is found in protected paths
+  - Add defensive validation in Lambda@Edge code as backup to template validation
+  - Log validation errors for monitoring and debugging
+  - _Requirements: 4.6_
 
 ## 7. CloudFront Distribution Updates and Protected Behaviors
 - [x] 7.1 Implement distribution update custom resource
@@ -150,11 +170,12 @@
   - Add error handling for missing hosted zones
   - _Requirements: 8.1, 8.4_
 
-- [x] 8.2 Create DNS records for custom domains
-  - Set up Route53 A records for main domain (apex and www)
-  - Configure API Gateway domain DNS record
-  - Add conditional DNS creation based on parameters
-  - _Requirements: 8.2, 8.5_
+- [x] 8.2 Update DNS records for main domain only
+  - Keep Route53 A records for main domain (apex and www)
+  - Remove API Gateway domain DNS record creation (ApiDNSRecord resource)
+  - Update conditional DNS creation logic to exclude API subdomain
+  - Ensure only WWWDNSRecord and ApexDNSRecord are created
+  - _Requirements: 8.3, 8.5_
 
 ## 9. Custom Resource Error Handling and Robustness
 - [x] 9.1 Implement comprehensive Lambda error handling
@@ -183,10 +204,11 @@
   - Add API Gateway request/response logging
   - _Requirements: 9.1, 9.2, 9.3_
 
-- [x] 10.2 Implement monitoring dashboards and alarms
-  - Create CloudWatch dashboard with Lambda and API Gateway metrics
-  - Set up conditional monitoring based on logging parameter
-  - Add performance and error rate monitoring
+- [x] 10.2 Update monitoring dashboards for Lambda@Edge
+  - Remove API Gateway metrics from CloudWatch dashboard
+  - Add Lambda@Edge metrics and regional log group monitoring
+  - Update dashboard configuration to exclude API Gateway widgets
+  - Add Lambda@Edge execution metrics and error monitoring
   - _Requirements: 9.4, 9.5_
 
 ## 11. Testing and Validation
@@ -211,31 +233,58 @@
   - Validate conditional CloudFormation logic works correctly
   - _Requirements: 1.5, 1.6, 2.4_
 
+- [x] 11.4 Add JWT verification unit tests
+  - Test valid JWT signature verification with cached JWKS
+  - Test invalid issuer, expiration, and audience validation
+  - Test both ID token (aud claim) and access token (client_id claim) validation
+  - Test token_use claim validation for id/access tokens
+  - Create test cases for Lambda@Edge JWT processing
+  - _Requirements: 5.7, 4.2_
+
+- [x] 11.5 Add Lambda@Edge integration tests
+  - Test GET /issue-cookie?action=signin with valid JWT returns 204 and sets host-only cookies
+  - Test GET /issue-cookie?action=signout expires all three cookies
+  - Test missing/invalid JWT returns 401 with WWW-Authenticate header
+  - Test /issue-cookie in protected paths returns 400 error
+  - Test Lambda@Edge regional deployment and execution
+  - _Requirements: 4.5, 4.6, 5.5_
+
+- [x] 11.6 Add template validation for protected paths
+  - Test template validation fails when /issue-cookie appears in ProtectedPaths parameter
+  - Test AllowedPattern regex correctly rejects /issue-cookie inclusion
+  - Test valid protected paths are accepted by validation
+  - Update existing validation scripts for new parameter constraints
+  - _Requirements: 4.6_
+
 ## 12. Documentation and Deployment Scripts
-- [x] 12.1 Create comprehensive README documentation
-  - Document deployment options (SAR and direct)
-  - Add parameter descriptions and examples
-  - Include post-deployment setup instructions
-  - Provide troubleshooting guide and cost estimation
+- [x] 12.1 Update README for Lambda@Edge architecture
+  - Remove API Gateway references and ApiDomainName parameter documentation
+  - Document new /issue-cookie* CloudFront behavior and usage
+  - Update integration examples for JWT Bearer token authentication
+  - Add Lambda@Edge logging information (regional log groups)
+  - Update setup instructions to reflect new architecture
   - _Requirements: 11.4_
 
-- [x] 12.2 Implement deployment automation scripts
-  - Create SAR deployment script with parameter handling
-  - Add key generation script for RSA key pairs
-  - Implement template validation script
+- [x] 12.2 Update deployment scripts for new parameters
+  - Remove ApiDomainName from deployment script parameter examples
+  - Add CognitoUserPoolId and CognitoAppClientIds parameters to scripts
+  - Update parameter validation and examples in deployment documentation
+  - Update template validation script for new parameter constraints
   - _Requirements: 11.1, 7.4_
 
 ## 13. Integration and Authentication System Support
-- [x] 13.1 Ensure Gatey Pro integration compatibility
-  - Validate API Gateway endpoint format for Gatey hooks
-  - Test IAM authentication requirements
-  - Verify cookie domain scoping for subdomain compatibility
+- [x] 13.1 Update Gatey Pro integration for Lambda@Edge
+  - Update integration documentation to use /issue-cookie endpoint on main domain
+  - Replace IAM authentication examples with JWT Bearer token authentication
+  - Verify cookie domain scoping for host-only cookies
+  - Update integration code examples and API calls
   - _Requirements: 10.1, 10.2_
 
-- [x] 13.2 Add support for custom authentication systems
-  - Document IAM request signing requirements
-  - Provide example integration code
-  - Test with various authentication providers
+- [x] 13.2 Add support for Cognito JWT authentication
+  - Document JWT Bearer token requirements for integration
+  - Provide example integration code for Cognito ID/access tokens
+  - Test with Cognito user pools and app clients
+  - Create integration guides for common authentication flows
   - _Requirements: 10.4, 10.5_
 
 ## 14. Production Readiness and Security Hardening
@@ -251,37 +300,51 @@
   - Add security monitoring for authentication failures
   - _Requirements: 9.5, 7.5_
 
-## 15. Remaining Tasks for Production Readiness
+## 15. Final Template Updates and Output Configuration
+- [x] 15.1 Update template outputs for Lambda@Edge architecture
+  - Remove ApiGatewayId, ApiGatewayInvokeUrl, and API Gateway domain outputs
+  - Remove ApiGatewayRegionalDomainName and ApiGatewayRegionalHostedZoneId outputs
+  - Update SetupInstructions output to reference /issue-cookie on main domain
+  - Add Lambda@Edge function ARN output for monitoring and debugging
+  - _Requirements: 4.1_
 
-- [x] 15.1 Implement native cryptography support in Lambda runtime
+- [x] 15.2 Validate template parameter constraints
+  - Ensure ProtectedPaths AllowedPattern regex correctly rejects /issue-cookie
+  - Test parameter validation with various input combinations
+  - Validate CognitoUserPoolId and CognitoAppClientIds parameter formats
+  - Test template deployment with new parameter constraints
+  - _Requirements: 4.6, 5.7_
+
+## 16. Remaining Tasks for Production Readiness
+- [x] 16.1 Implement native cryptography support in Lambda runtime
   - Utilize Lambda runtime's built-in cryptography libraries for RSA-SHA1 signing
   - Update Lambda function to use native cryptography without external dependencies
   - Test proper signature generation and CloudFront validation
   - Remove Lambda layer dependencies from deployment scripts and templates
   - _Requirements: 5.2, 3.2, 7.1, 13.1, 13.2, 13.3_
 
-- [x] 15.2 Add CloudFormation template validation script
+- [x] 16.2 Add CloudFormation template validation script
   - Create script to validate SAM template syntax and structure
   - Add parameter validation and constraint checking
   - Validate resource dependencies and references
   - Include in deployment automation workflow
   - _Requirements: 11.4, 12.4_
 
-- [x] 15.3 Perform comprehensive end-to-end testing
+- [x] 16.3 Perform comprehensive end-to-end testing
   - Test complete authentication flow from sign-in to content access
   - Validate cookie issuance and expiration workflows with real RSA signatures
   - Test error scenarios and edge cases
   - Verify cross-browser compatibility
   - _Requirements: 10.3, 12.1_
 
-- [x] 15.4 Validate NoCachePolicy functionality
+- [x] 16.4 Validate NoCachePolicy functionality
   - Test that protected content responses include "Cache-Control: max-age=0" headers
   - Verify that browsers do not cache protected content
   - Test that restricted path responses also include no-cache headers
   - Validate that public content still uses normal caching behavior
   - _Requirements: 12.1, 12.4, 12.5_
 
-- [x] 15.5 Validate deployment and cleanup procedures
+- [x] 16.5 Validate deployment and cleanup procedures
   - Test stack creation with various parameter combinations
   - Verify stack updates and rollbacks work correctly
   - Test complete stack deletion and resource cleanup

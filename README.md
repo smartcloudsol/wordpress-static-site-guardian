@@ -4,26 +4,25 @@
 
 ## 🛡️ What This Application Does
 
-WordPress Static Site Guardian provides comprehensive protection for static WordPress-generated sites using AWS CloudFront signed cookies. It creates a complete infrastructure that:
+WordPress Static Site Guardian provides comprehensive protection for static WordPress-generated sites using AWS CloudFront signed cookies with Lambda@Edge authentication. It creates a complete infrastructure that:
 
-- **Protects Premium Content**: Secures specific paths (like `/dashboard`, `/members`, `/courses`) with authentication
+- **Protects Premium Content**: Secures specific paths (like `/dashboard`, `/members`, `/courses`) with JWT-based authentication
 - **Seamless User Experience**: Redirects unauthenticated users to your sign-in page with return URL preservation
-- **Enterprise Security**: Uses RSA-SHA1 signed cookies with KMS-encrypted private keys
-- **Global Performance**: Leverages CloudFront's global edge network for fast content delivery
-- **Easy Integration**: Works with existing authentication systems like [Gatey Pro](https://wpsuite.io) and Amazon Cognito
+- **Enterprise Security**: Uses RSA-SHA1 signed cookies with KMS-encrypted private keys and JWT Bearer token authentication
+- **Global Performance**: Leverages CloudFront's global edge network with Lambda@Edge for ultra-fast authentication
+- **Easy Integration**: Works with Amazon Cognito User Pools and other JWT-compatible authentication systems
 
 ## 🏗️ Architecture
 
 This application creates:
 
 - **S3 Bucket**: Secure static file hosting with public access blocked
-- **CloudFront Distribution**: Global CDN with signed cookie authentication and custom error pages
-- **API Gateway**: RESTful endpoint with custom domain for cookie issuance and management
-- **Lambda Function**: Serverless cookie signing with RSA cryptography
+- **CloudFront Distribution**: Global CDN with signed cookie authentication, custom error pages, and `/issue-cookie*` behavior
+- **Lambda@Edge Function**: Serverless cookie signing with JWT authentication and RSA cryptography at edge locations
 - **CloudFront Functions**: Edge-based authentication and path rewriting logic
 - **Route53 Records**: Automatic DNS configuration (optional)
 - **KMS Integration**: Secure private key management
-- **CloudWatch Monitoring**: Comprehensive logging and metrics (optional)
+- **CloudWatch Monitoring**: Comprehensive logging and metrics with regional log groups (optional)
 
 ## 📋 Prerequisites
 
@@ -53,7 +52,7 @@ This creates:
 
 ### 3. Domain Configuration
 - Domain registered and DNS accessible
-- API subdomain planned (e.g., `api.yourdomain.com`)
+- Cognito User Pool configured for JWT authentication
 
 ## 📦 Deployment Options
 
@@ -74,10 +73,11 @@ Use our automated deployment script for SAR applications:
 ./scripts/deploy-from-sar.sh \
   --stack-name my-wordpress-protection \
   --domain example.com \
-  --api-domain api.example.com \
   --certificate-arn arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012 \
   --kms-key-id 12345678-1234-1234-1234-123456789012 \
   --public-key-content "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA..." \
+  --cognito-user-pool-id us-east-1_abcdefghi \
+  --cognito-app-client-ids "client1,client2" \
   --enable-logging
 ```
 
@@ -88,8 +88,9 @@ Use our automated deployment script for SAR applications:
 | Parameter | Description | Example |
 |-----------|-------------|---------|
 | **DomainName** | Your main domain for CloudFront | `example.com` |
-| **ApiDomainName** | API subdomain (must be subdomain of main domain) | `api.example.com` |
 | **CertificateArn** | ACM certificate ARN in us-east-1 | `arn:aws:acm:us-east-1:123...` |
+| **CognitoUserPoolId** | Cognito User Pool ID for JWT issuer validation | `us-east-1_abcdefghi` |
+| **CognitoAppClientIds** | Comma-separated Cognito App Client IDs for JWT audience validation | `client1,client2` |
 | **KmsKeyId** | KMS Key ID from key generation script | `12345678-1234-1234-1234-123456789012` |
 | **PublicKeyContent** | Base64 public key from generation script | `MIIBIjANBgkqhkiG9w0BAQEF...` |
 | **S3WWWRoot** | Non-empty S3 prefix that does not start or end with '/' | `wwwroot` |
@@ -98,7 +99,7 @@ Use our automated deployment script for SAR applications:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| **ProtectedPaths** | *(no default)* | Comma-separated paths to protect (e.g., `/dashboard,/profile`) |
+| **ProtectedPaths** | *(no default)* | Comma-separated paths to protect (e.g., `/dashboard,/profile`). Cannot include `/issue-cookie` |
 | **SigninPagePath** | `/signin` | Path to redirect unauthenticated users |
 | **CookieExpirationDays** | `30` | Cookie lifetime (1-365 days) |
 | **S3BucketName** | *(auto-generated)* | Custom S3 bucket name (optional) |
@@ -115,7 +116,6 @@ After successful deployment:
 - **Automatic**: If `CreateDNSRecords` is `true`, DNS records are created automatically in Route53
 - **Manual**: If `CreateDNSRecords` is `false`, configure DNS manually using the provided outputs:
   - **Main Domain** → CloudFront Distribution Domain
-  - **API Domain** → API Gateway Regional Domain
   - **WWW Subdomain** → CloudFront Distribution Domain
 
 ### 2. Upload Static Files
@@ -148,17 +148,35 @@ This is because CloudFront error pages are fetched **from the origin (S3)**, not
 1. **Public Access**: Visit public pages to ensure they load correctly
 2. **Protected Paths**: Visit protected paths - should redirect to your sign-in page
 3. **Error Pages**: Test 404 and 403 error handling
-4. **Cookie Issuance**: Test the API Gateway endpoint for cookie generation
+4. **Cookie Issuance**: Test the `/issue-cookie` endpoint with JWT Bearer token authentication
 5. **Authenticated Access**: Verify signed cookies grant access to protected content
 
 ### 5. Integrate with Authentication
-Configure your authentication system ([Gatey Pro](https://wpsuite.io) API Settings and Sign-in/Sign-out Hooks, custom auth, etc.) to call the cookie issuance endpoint after successful login.
+Configure your authentication system to call the cookie issuance endpoint after successful login:
+
+#### JWT Bearer Token Authentication
+The `/issue-cookie` endpoint requires a valid JWT Bearer token in the Authorization header:
+
+```bash
+# Issue cookies (signin)
+curl -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+     "https://yourdomain.com/issue-cookie?action=signin"
+
+# Expire cookies (signout)  
+curl -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+     "https://yourdomain.com/issue-cookie?action=signout"
+```
+
+#### Cognito Integration
+- Configure your Cognito User Pool ID and App Client IDs in the deployment parameters
+- Use Cognito ID tokens or access tokens as Bearer tokens
+- The system validates JWT issuer, audience, expiration, and signature automatically
 
 ## 📊 Monitoring & Troubleshooting
 
 ### CloudWatch Logs (if enabled)
-- **Lambda Function**: `/aws/lambda/[STACK_NAME]-cookie-signing`
-- **API Gateway**: `/aws/apigateway/[STACK_NAME]-cookie-api`
+- **Lambda@Edge Function**: `/aws/lambda/us-east-1.[STACK_NAME]-cookie-signing-edge` (and regional log groups)
+- **CloudFront Functions**: Available in CloudFront console monitoring
 
 ### Common Issues
 
@@ -168,9 +186,9 @@ Configure your authentication system ([Gatey Pro](https://wpsuite.io) API Settin
    - Ensure key group configuration is correct
 
 2. **Cookies Not Being Set**
-   - Verify API Gateway CORS configuration
-   - Check Lambda function response headers
-   - Confirm domain attributes in cookies
+   - Verify JWT Bearer token is valid and properly formatted
+   - Check Lambda@Edge function response headers in CloudWatch logs
+   - Confirm host-only cookies are being set (no Domain attribute)
 
 3. **Certificate Issues**
    - Ensure certificate is in us-east-1 region
@@ -181,22 +199,30 @@ Configure your authentication system ([Gatey Pro](https://wpsuite.io) API Settin
 Typical monthly costs for a medium-traffic site:
 
 - **CloudFront**: ~$1-10 (depending on traffic)
-- **Lambda**: ~$0.20-2 (depending on authentication frequency)
-- **API Gateway**: ~$3.50 per million requests
+- **Lambda@Edge**: ~$0.60 per million requests + $0.50 per GB-second
 - **S3**: ~$0.023 per GB storage
 - **KMS**: $1 per key + $0.03 per 10K requests
 - **CloudWatch**: ~$0.50-5 (if logging enabled)
 
-**Total estimated cost**: $5-25/month for most use cases
+**Total estimated cost**: $3-20/month for most use cases (lower than API Gateway version)
 
 ## 🔒 Security Features
 
 - **Zero Plaintext Storage**: Private keys encrypted with AWS KMS
+- **JWT Authentication**: Industry-standard JWT Bearer token validation with JWKS
 - **Least Privilege IAM**: Minimal required permissions
-- **Secure Cookies**: HttpOnly, Secure, SameSite attributes
+- **Host-Only Cookies**: Secure cookies without Domain attribute for better security
 - **HTTPS Enforcement**: TLS 1.2+ required
-- **Edge Security**: Authentication logic runs at CloudFront edge locations
-- **Audit Trail**: Comprehensive CloudWatch logging (optional)
+- **Edge Security**: Authentication logic runs at CloudFront edge locations globally
+- **Audit Trail**: Comprehensive CloudWatch logging with regional log groups (optional)
+
+## 🌐 Lambda@Edge Benefits
+
+- **Global Performance**: Authentication happens at CloudFront edge locations worldwide
+- **Reduced Latency**: No API Gateway round-trip for cookie issuance
+- **Cost Effective**: Lower costs compared to API Gateway architecture
+- **Simplified Architecture**: Fewer moving parts and dependencies
+- **Regional Logging**: Lambda@Edge logs appear in CloudWatch logs in the region where the function executed
 
 ## 📁 Project Structure
 

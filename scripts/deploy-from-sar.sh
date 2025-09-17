@@ -27,8 +27,9 @@ print_error() {
 # Default values
 STACK_NAME=""
 DOMAIN_NAME=""
-API_DOMAIN_NAME=""
 CERTIFICATE_ARN=""
+COGNITO_USER_POOL_ID=""
+COGNITO_APP_CLIENT_IDS=""
 KMS_KEY_ID=""
 PUBLIC_KEY_CONTENT=""
 PROTECTED_PATHS=""
@@ -53,14 +54,15 @@ Deploy WordPress Static Site Guardian from AWS Serverless Application Repository
 REQUIRED OPTIONS:
     -s, --stack-name STACK_NAME          CloudFormation stack name (required)
     -d, --domain DOMAIN                  Main domain for CloudFront (required)
-    -a, --api-domain API_DOMAIN          API Gateway domain (required)
     -c, --certificate-arn ARN            ACM certificate ARN in us-east-1 (required)
+    --cognito-user-pool-id POOL_ID       Cognito User Pool ID for JWT issuer validation (required)
+    --cognito-app-client-ids CLIENT_IDS  Comma-separated Cognito App Client IDs for JWT audience validation (required)
     -k, --kms-key-id KEY_ID              KMS Key ID containing encrypted private key (required)
     -u, --public-key-content CONTENT     Base64 public key content (required)
     -w, --s3-wwwroot-prefix PREFIX       Non-empty S3 prefix that does not start or end with '/' (required)
 
 OPTIONAL OPTIONS:
-    -p, --protected-paths PATHS          Comma-separated protected paths (required, e.g., /dashboard,/profile)
+    -p, --protected-paths PATHS          Comma-separated protected paths (e.g., /dashboard,/profile). Cannot include /issue-cookie
     -i, --signin-path PATH               Path for sign-in page (default: /signin)
     -e, --expiration-days DAYS           Cookie expiration in days (default: 30)
     -b, --s3-bucket-name NAME            Custom S3 bucket name (optional, auto-generated if not provided)
@@ -76,16 +78,18 @@ EXAMPLES:
     # Basic deployment
     $0 -s my-wordpress-protection \\
        -d example.com \\
-       -a api.example.com \\
        -c arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012 \\
+       --cognito-user-pool-id us-east-1_abcdefghi \\
+       --cognito-app-client-ids "client1,client2" \\
        -k 12345678-1234-1234-1234-123456789012 \\
        -u "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA..."
 
     # With custom settings
     $0 -s my-stack \\
        -d site.com \\
-       -a api.site.com \\
        -c arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012 \\
+       --cognito-user-pool-id us-east-1_testpool \\
+       --cognito-app-client-ids "client1,client2,client3" \\
        -k 12345678-1234-1234-1234-123456789012 \\
        -u "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA..." \\
        -w "wwwroot" \\
@@ -115,12 +119,16 @@ while [[ $# -gt 0 ]]; do
             DOMAIN_NAME="$2"
             shift 2
             ;;
-        -a|--api-domain)
-            API_DOMAIN_NAME="$2"
-            shift 2
-            ;;
         -c|--certificate-arn)
             CERTIFICATE_ARN="$2"
+            shift 2
+            ;;
+        --cognito-user-pool-id)
+            COGNITO_USER_POOL_ID="$2"
+            shift 2
+            ;;
+        --cognito-app-client-ids)
+            COGNITO_APP_CLIENT_IDS="$2"
             shift 2
             ;;
         -k|--kms-key-id)
@@ -188,7 +196,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate required parameters
-if [[ -z "$STACK_NAME" || -z "$DOMAIN_NAME" || -z "$API_DOMAIN_NAME" || -z "$CERTIFICATE_ARN" || -z "$KMS_KEY_ID" || -z "$PUBLIC_KEY_CONTENT" ]]; then
+if [[ -z "$STACK_NAME" || -z "$DOMAIN_NAME" || -z "$CERTIFICATE_ARN" || -z "$COGNITO_USER_POOL_ID" || -z "$COGNITO_APP_CLIENT_IDS" || -z "$KMS_KEY_ID" || -z "$PUBLIC_KEY_CONTENT" ]]; then
     print_error "Missing required parameters"
     show_usage
     exit 1
@@ -212,16 +220,24 @@ if [[ ${#PUBLIC_KEY_CONTENT} -lt 100 ]]; then
     exit 1
 fi
 
-# Validate API domain is subdomain of main domain
-if [[ "$API_DOMAIN_NAME" != *"$DOMAIN_NAME" ]]; then
-    print_warning "API domain should be a subdomain of the main domain"
+# Validate Cognito User Pool ID format
+if [[ ! "$COGNITO_USER_POOL_ID" =~ ^[a-zA-Z0-9-_]+_[a-zA-Z0-9]+$ ]]; then
+    print_error "Invalid Cognito User Pool ID format. Must be like us-east-1_abcdefghi"
+    exit 1
+fi
+
+# Validate protected paths don't contain /issue-cookie
+if [[ "$PROTECTED_PATHS" == *"/issue-cookie"* ]]; then
+    print_error "Protected paths cannot contain /issue-cookie. This path is reserved for cookie issuance."
+    exit 1
 fi
 
 print_status "Deploying WordPress Static Site Guardian from SAR..."
 echo "  Stack Name: $STACK_NAME"
 echo "  Domain: $DOMAIN_NAME"
-echo "  API Domain: $API_DOMAIN_NAME"
 echo "  Certificate ARN: $CERTIFICATE_ARN"
+echo "  Cognito User Pool ID: $COGNITO_USER_POOL_ID"
+echo "  Cognito App Client IDs: $COGNITO_APP_CLIENT_IDS"
 echo "  KMS Key ID: $KMS_KEY_ID"
 echo "  Public Key Length: ${#PUBLIC_KEY_CONTENT} characters"
 echo "  S3 WWWRoot Prefix: $S3_WWWROOT_PREFIX"
@@ -249,8 +265,9 @@ aws serverlessrepo create-cloud-formation-change-set \
     --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
     --parameter-overrides \
         ParameterKey=DomainName,ParameterValue="$DOMAIN_NAME" \
-        ParameterKey=ApiDomainName,ParameterValue="$API_DOMAIN_NAME" \
         ParameterKey=CertificateArn,ParameterValue="$CERTIFICATE_ARN" \
+        ParameterKey=CognitoUserPoolId,ParameterValue="$COGNITO_USER_POOL_ID" \
+        ParameterKey=CognitoAppClientIds,ParameterValue="$COGNITO_APP_CLIENT_IDS" \
         ParameterKey=KmsKeyId,ParameterValue="$KMS_KEY_ID" \
         ParameterKey=PublicKeyContent,ParameterValue="$PUBLIC_KEY_CONTENT" \
         ParameterKey=S3WWWRoot,ParameterValue="$S3_WWWROOT_PREFIX" \
@@ -297,25 +314,28 @@ if [[ $? -eq 0 ]]; then
     
     S3_BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query "Stacks[0].Outputs[?OutputKey=='S3BucketName'].OutputValue" --output text)
     CLOUDFRONT_DOMAIN=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionDomain'].OutputValue" --output text)
-    API_GATEWAY_URL=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query "Stacks[0].Outputs[?OutputKey=='ApiGatewayInvokeUrl'].OutputValue" --output text)
+    LAMBDA_EDGE_ARN=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query "Stacks[0].Outputs[?OutputKey=='LambdaEdgeFunctionArn'].OutputValue" --output text)
     
     echo
     print_status "Deployment Summary:"
     echo "  S3 Bucket: $S3_BUCKET_NAME"
     echo "  CloudFront Domain: $CLOUDFRONT_DOMAIN"
-    echo "  API Gateway URL: $API_GATEWAY_URL"
+    echo "  Lambda@Edge Function: $LAMBDA_EDGE_ARN"
+    echo "  Cookie Endpoint: https://$DOMAIN_NAME/issue-cookie"
     echo
     
     print_warning "IMPORTANT: Complete these final steps:"
     echo "1. Configure DNS records to point $DOMAIN_NAME to $CLOUDFRONT_DOMAIN"
-    echo "2. Configure DNS records to point $API_DOMAIN_NAME to the API Gateway"
-    echo "3. Upload your static WordPress files to S3 bucket: $S3_BUCKET_NAME/$S3_WWWROOT_PREFIX"
-    echo "4. Test the cookie issuance endpoint with proper IAM authentication"
-    echo "5. Verify that protected paths are properly secured"
+    echo "2. Upload your static WordPress files to S3 bucket: $S3_BUCKET_NAME/$S3_WWWROOT_PREFIX"
+    echo "3. Test the cookie issuance endpoint with JWT Bearer token authentication:"
+    echo "   curl -H \"Authorization: Bearer YOUR_JWT_TOKEN\" \"https://$DOMAIN_NAME/issue-cookie?action=signin\""
+    echo "4. Verify that protected paths are properly secured"
+    echo "5. Configure your authentication system to use the /issue-cookie endpoint"
     
     if [[ "$ENABLE_LOGGING" == "true" ]]; then
-        DASHBOARD_URL=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query "Stacks[0].Outputs[?OutputKey=='MonitoringDashboard'].OutputValue" --output text)
+        DASHBOARD_URL=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query "Stacks[0].Outputs[?OutputKey=='MonitoringDashboardUrl'].OutputValue" --output text)
         echo "6. Monitor your application: $DASHBOARD_URL"
+        echo "7. Lambda@Edge logs appear in CloudWatch logs in the region where the function executed"
     fi
     
 else

@@ -2,7 +2,7 @@
 
 ## Introduction
 
-WordPress Static Site Guardian is an enterprise-grade AWS solution that enables static WordPress sites to maintain authentication-protected content areas. The system leverages CloudFront signed cookies, API Gateway, and Lambda functions to provide seamless authentication integration while maintaining the performance benefits of static site hosting.
+WordPress Static Site Guardian is an enterprise-grade AWS solution that enables static WordPress sites to maintain authentication-protected content areas. The system leverages CloudFront signed cookies and Lambda@Edge functions to provide seamless authentication integration while maintaining the performance benefits of static site hosting.
 
 The solution addresses the challenge faced by WordPress site owners who want to serve their sites statically from S3/CloudFront for performance and security benefits, but still need to protect premium content areas like member dashboards, course materials, or subscription-only content.
 
@@ -46,29 +46,32 @@ The solution addresses the challenge faced by WordPress site owners who want to 
 4. WHEN cookie expiration is configured THEN it SHALL align with Cognito refresh token validity
 5. WHEN users sign out THEN cookies SHALL be immediately expired with Max-Age=0
 
-### Requirement 4: API Gateway Cookie Issuance Service
+### Requirement 4: Lambda@Edge Cookie Issuance Service
 
-**User Story:** As an authentication system integrator, I want a REST API endpoint to issue and manage signed cookies, so that I can integrate with existing authentication flows.
-
-#### Acceptance Criteria
-
-1. WHEN the API Gateway is deployed THEN it SHALL expose a GET endpoint at /issue-cookie
-2. WHEN the API is called THEN it SHALL require AWS IAM authentication for security
-3. WHEN CORS requests are made THEN the API SHALL support proper CORS headers with credential support
-4. WHEN the API is accessed THEN it SHALL use a custom domain that is a subdomain of the main site domain
-5. WHEN cookies are issued THEN the Lambda function SHALL generate properly signed CloudFront cookies
-
-### Requirement 5: Serverless Cookie Signing Function
-
-**User Story:** As a security engineer, I want cookie signing to be handled by a serverless Lambda function, so that private keys are never exposed and the system scales automatically.
+**User Story:** As an authentication system integrator, I want a CloudFront-integrated endpoint to issue and manage signed cookies, so that I can integrate with existing authentication flows without requiring separate API infrastructure.
 
 #### Acceptance Criteria
 
-1. WHEN the Lambda function is invoked THEN it SHALL retrieve the encrypted private key from KMS
+1. WHEN the CloudFront distribution is deployed THEN it SHALL expose a cache behavior at /issue-cookie* with Lambda@Edge integration
+2. WHEN the endpoint is called THEN it SHALL require JWT Bearer token authentication for security
+3. WHEN JWT tokens are provided THEN the system SHALL verify signature, issuer, expiration, and audience claims
+4. WHEN the endpoint is accessed THEN it SHALL be available directly on the main domain without requiring subdomains
+5. WHEN cookies are issued THEN the Lambda@Edge function SHALL generate properly signed host-only CloudFront cookies
+6. WHEN /issue-cookie is included in protected paths THEN the system SHALL reject the configuration and return validation errors
+
+### Requirement 5: Lambda@Edge Cookie Signing Function
+
+**User Story:** As a security engineer, I want cookie signing to be handled by a Lambda@Edge function, so that private keys are never exposed and the system scales automatically at edge locations.
+
+#### Acceptance Criteria
+
+1. WHEN the Lambda@Edge function is invoked THEN it SHALL retrieve the encrypted private key from KMS
 2. WHEN cookies are signed THEN the function SHALL use built-in RSA cryptography with proper CloudFront cookie format
 3. WHEN the function executes THEN it SHALL follow the principle of least privilege with minimal IAM permissions
 4. WHEN cryptographic operations are performed THEN they SHALL use the Lambda runtime's native cryptography libraries
 5. WHEN errors occur THEN the function SHALL provide comprehensive logging and error handling
+6. WHEN configuration values are needed THEN they SHALL be embedded as constants in code rather than environment variables
+7. WHEN JWT verification is performed THEN it SHALL validate signature via cached Cognito JWKS, issuer, expiration, and audience claims
 
 ### Requirement 6: CloudFront Edge Functions for Request Processing
 
@@ -102,9 +105,9 @@ The solution addresses the challenge faced by WordPress site owners who want to 
 
 1. WHEN DNS creation is enabled THEN the system SHALL automatically create Route53 records
 2. WHEN custom domains are configured THEN SSL certificates SHALL be validated and applied
-3. WHEN API domains are set THEN they SHALL be configured as subdomains of the main domain
-4. WHEN DNS records are created THEN they SHALL include both apex and www subdomain configurations
-5. WHEN manual DNS is preferred THEN the system SHALL provide all necessary DNS configuration outputs
+3. WHEN DNS records are created THEN they SHALL include both apex and www subdomain configurations for the main domain only
+4. WHEN manual DNS is preferred THEN the system SHALL provide all necessary DNS configuration outputs
+5. WHEN API subdomains are no longer needed THEN the system SHALL not create or manage API-specific DNS records
 
 ### Requirement 9: Monitoring and Observability
 
@@ -113,8 +116,8 @@ The solution addresses the challenge faced by WordPress site owners who want to 
 #### Acceptance Criteria
 
 1. WHEN detailed logging is enabled THEN the system SHALL create CloudWatch dashboards
-2. WHEN Lambda functions execute THEN they SHALL log all operations with appropriate log levels
-3. WHEN API Gateway requests are made THEN they SHALL be logged with request/response details
+2. WHEN Lambda@Edge functions execute THEN they SHALL log all operations with appropriate log levels in regional CloudWatch log groups
+3. WHEN cookie issuance requests are made THEN they SHALL be logged with request/response details
 4. WHEN CloudFront functions execute THEN they SHALL provide debugging information
 5. WHEN monitoring is configured THEN it SHALL include metrics for authentication success rates and performance
 
@@ -124,10 +127,10 @@ The solution addresses the challenge faced by WordPress site owners who want to 
 
 #### Acceptance Criteria
 
-1. WHEN integrated with Gatey Pro THEN the system SHALL work with Cognito sign-in/sign-out hooks
-2. WHEN authentication flows complete THEN cookies SHALL be automatically issued via API calls
-3. WHEN users sign out THEN cookies SHALL be automatically cleared via API calls
-4. WHEN custom authentication is used THEN the API SHALL support standard IAM-signed requests
+1. WHEN integrated with Gatey Pro THEN the system SHALL work with Cognito sign-in/sign-out hooks using JWT tokens
+2. WHEN authentication flows complete THEN cookies SHALL be automatically issued via /issue-cookie endpoint calls
+3. WHEN users sign out THEN cookies SHALL be automatically cleared via /issue-cookie endpoint calls
+4. WHEN custom authentication is used THEN the endpoint SHALL support JWT Bearer token authentication
 5. WHEN integration is configured THEN it SHALL preserve existing user experience and workflows
 
 ### Requirement 11: Deployment and Infrastructure as Code
@@ -175,5 +178,5 @@ The solution addresses the challenge faced by WordPress site owners who want to 
 1. WHEN errors occur THEN the system SHALL provide graceful degradation and detailed error messages
 2. WHEN CloudFormation operations fail THEN custom resources SHALL prevent stack operations from hanging
 3. WHEN resource dependencies exist THEN deletion SHALL occur in proper order to prevent conflicts
-4. WHEN API validation fails THEN the system SHALL provide clear parameter validation messages
+4. WHEN parameter validation fails THEN the system SHALL provide clear validation error messages
 5. WHEN edge cases occur THEN the system SHALL handle unexpected data structures and API responses robustly
