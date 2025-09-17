@@ -41,9 +41,7 @@ COGNITO_USER_POOL_ID = 'us-east-1_abcdefghi'  # Replace with actual User Pool ID
 COGNITO_APP_CLIENT_IDS = 'client1,client2'  # Replace with actual App Client IDs
 
 # Embedded private key (replaces SSM Parameter Store for Lambda@Edge)
-EMBEDDED_PRIVATE_KEY = '''-----BEGIN RSA PRIVATE KEY-----
-PLACEHOLDER_PRIVATE_KEY_CONTENT
------END RSA PRIVATE KEY-----'''
+EMBEDDED_PRIVATE_KEY = '''PLACEHOLDER_PRIVATE_KEY_CONTENT'''
 
 def lambda_handler(event, context):
     """
@@ -402,15 +400,9 @@ def create_cookie_response(status_code, cookies, message):
         headers['content-type'] = [{'key': 'Content-Type', 'value': 'application/json'}]
     
     # Add Set-Cookie headers (CloudFront Lambda@Edge format)
-    # Each Set-Cookie header needs a unique key name
-    for i, cookie in enumerate(cookies):
-        headers[f'set-cookie-{i}'] = [{'key': 'Set-Cookie', 'value': cookie}]
-    
-    body = json.dumps({
-        'message': message,
-        'timestamp': datetime.datetime.utcnow().isoformat(),
-        'cookieCount': len(cookies)
-    }) if status_code != 204 else ''
+    # All Set-Cookie headers use the same key name
+    if cookies:
+        headers['set-cookie'] = [{'key': 'Set-Cookie', 'value': cookie} for cookie in cookies]
     
     response = {
         'status': str(status_code),
@@ -418,8 +410,13 @@ def create_cookie_response(status_code, cookies, message):
         'headers': headers
     }
     
-    if body:
-        response['body'] = body
+    # Only add body for non-204 responses (Lambda@Edge requirement)
+    if status_code != 204:
+        response['body'] = json.dumps({
+            'message': message,
+            'timestamp': datetime.datetime.utcnow().isoformat(),
+            'cookieCount': len(cookies)
+        })
     
     return response
 
@@ -438,7 +435,9 @@ def get_private_key_from_ssm():
     """Retrieve private key from embedded configuration (Lambda@Edge compatible)"""
     try:
         # For Lambda@Edge, use embedded private key instead of SSM
-        if EMBEDDED_PRIVATE_KEY and 'PLACEHOLDER_PRIVATE_KEY_CONTENT' not in EMBEDDED_PRIVATE_KEY:
+        if (EMBEDDED_PRIVATE_KEY and 
+            len(EMBEDDED_PRIVATE_KEY.strip()) > 100 and
+            ('-----BEGIN' in EMBEDDED_PRIVATE_KEY and '-----END' in EMBEDDED_PRIVATE_KEY)):
             logger.info("Using embedded private key for Lambda@Edge")
             return EMBEDDED_PRIVATE_KEY
         else:

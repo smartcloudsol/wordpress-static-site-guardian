@@ -1491,6 +1491,27 @@ def send_response(event, context, response_status, response_data):
             logger.error(f"Final response attempt also failed: {final_error}")
             # At this point, CloudFormation will timeout, but we've logged everything
 
+def extract_private_key_content(private_key_pem):
+    """Prepare the complete PEM private key for embedding in Python code"""
+    try:
+        # Keep the complete PEM format but escape newlines for Python string embedding
+        content = private_key_pem.strip()
+        
+        # Validate it's a proper PEM format
+        if not (('-----BEGIN RSA PRIVATE KEY-----' in content and '-----END RSA PRIVATE KEY-----' in content) or
+                ('-----BEGIN PRIVATE KEY-----' in content and '-----END PRIVATE KEY-----' in content)):
+            raise ValueError("Invalid PEM format - missing proper headers/footers")
+        
+        # Keep newlines as-is since we're using triple quotes in the template
+        # No need to escape newlines in triple-quoted strings
+        
+        logger.info(f"Prepared complete PEM private key: {len(content)} characters")
+        return content
+        
+    except Exception as e:
+        logger.error(f"Error preparing private key content: {e}")
+        raise
+
 def update_lambda_code(props):
     """Update Lambda function code with CloudFormation parameter values"""
     try:
@@ -1552,7 +1573,7 @@ def update_lambda_code(props):
             "KMS_KEY_ID = '12345678-1234-1234-1234-123456789012'": f"KMS_KEY_ID = '{props['KmsKeyId']}'",
             "COGNITO_USER_POOL_ID = 'us-east-1_abcdefghi'": f"COGNITO_USER_POOL_ID = '{props['CognitoUserPoolId']}'",
             "COGNITO_APP_CLIENT_IDS = 'client1,client2'": f"COGNITO_APP_CLIENT_IDS = '{props['CognitoAppClientIds']}'",
-            "PLACEHOLDER_PRIVATE_KEY_CONTENT": private_key_pem.replace('-----BEGIN RSA PRIVATE KEY-----\n', '').replace('\n-----END RSA PRIVATE KEY-----', '').replace('\n', '\\n')
+            "PLACEHOLDER_PRIVATE_KEY_CONTENT": extract_private_key_content(private_key_pem)
         }
         
         # Apply replacements
