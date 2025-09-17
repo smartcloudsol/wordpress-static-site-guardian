@@ -175,7 +175,7 @@ curl -H "Authorization: Bearer YOUR_JWT_TOKEN" \
 ## 📊 Monitoring & Troubleshooting
 
 ### CloudWatch Logs (if enabled)
-- **Lambda@Edge Function**: `/aws/lambda/us-east-1.[STACK_NAME]-cookie-signing-edge` (and regional log groups)
+- **Lambda@Edge Function**: `/aws/lambda/us-east-1.[STACK_NAME]-cookie-signing` (and regional log groups)
 - **CloudFront Functions**: Available in CloudFront console monitoring
 
 ### Common Issues

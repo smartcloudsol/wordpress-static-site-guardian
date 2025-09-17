@@ -12,7 +12,7 @@ Metadata:
     ReadmeUrl: README.md
     Labels: ['wordpress', 'cloudfront', 'static-site', 'authentication', 'security', 'signed-cookies']
     HomePageUrl: https://kirodev.wpsuite.io
-    SemanticVersion: 1.1.1
+    SemanticVersion: 1.1.7
     SourceCodeUrl: https://github.com/smartcloudsol/wordpress-static-site-guardian
 
 Parameters:
@@ -122,12 +122,9 @@ Conditions:
 
 Globals:
   Function:
-    Timeout: 30
-    MemorySize: 256
+    Timeout: 5
+    MemorySize: 128
     Runtime: python3.12
-    Environment:
-      Variables:
-        LOG_LEVEL: !If [EnableLogging, 'DEBUG', 'INFO']
 
 Resources:
   # S3 Bucket for static site hosting
@@ -312,7 +309,7 @@ Resources:
             Compress: false
             LambdaFunctionAssociations:
               - EventType: viewer-request
-                LambdaFunctionARN: !GetAtt CookieSigningFunction.Arn
+                LambdaFunctionARN: !Ref CookieSigningFunction.Version
           - PathPattern: '/restricted*'
             TargetOriginId: S3Origin
             ViewerProtocolPolicy: redirect-to-https
@@ -406,37 +403,58 @@ Resources:
               - s3:GetBucketAcl
             Resource: !Sub 'arn:aws:s3:::${StaticSiteBucket}'
 
+  # IAM Role for Lambda@Edge function
+  LambdaEdgeExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-lambda-edge-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - edgelambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: LambdaEdgeKMSAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:DescribeKey
+                Resource: !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/${KmsKeyId}'
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudfront/private-key/*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: 
+                  - !Sub 'arn:aws:logs:us-east-1:${AWS::AccountId}:log-group:/aws/lambda/*'
+                  - !Sub 'arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/lambda/us-east-1.*'
+
   # Lambda Function for issuing signed cookies
   CookieSigningFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: !Sub '${AWS::StackName}-cookie-signing-edge'
+      FunctionName: !Sub '${AWS::StackName}-cookie-signing'
       CodeUri: src/
       Handler: lambda_function.lambda_handler
       Description: 'Lambda@Edge function for issuing CloudFront signed cookies with JWT authentication'
       # Lambda@Edge functions cannot use environment variables
       # Configuration is embedded in the function code during deployment
-      Policies:
-        - Version: '2012-10-17'
-          Statement:
-            - Effect: Allow
-              Action:
-                - logs:CreateLogGroup
-                - logs:CreateLogStream
-                - logs:PutLogEvents
-              Resource: 
-                - !Sub 'arn:aws:logs:us-east-1:${AWS::AccountId}:log-group:/aws/lambda/*'
-                - !Sub 'arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/lambda/us-east-1.*'
-            - Effect: Allow
-              Action:
-                - kms:Decrypt
-                - kms:DescribeKey
-              Resource: !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/${KmsKeyId}'
-            - Effect: Allow
-              Action:
-                - ssm:GetParameter
-                - ssm:GetParameters
-              Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudfront/private-key/*'
+      AutoPublishAlias: live
+      Role: !GetAtt LambdaEdgeExecutionRole.Arn
 
   # Route53 Hosted Zone Lookup
   HostedZoneLookup:
@@ -558,7 +576,7 @@ Outputs:
 
   LambdaEdgeFunctionArn:
     Description: 'Lambda@Edge Function ARN for cookie signing with JWT authentication'
-    Value: !GetAtt CookieSigningFunction.Arn
+    Value: !Ref CookieSigningFunction.Version
     Export:
       Name: !Sub '${AWS::StackName}-LambdaEdgeArn'
 

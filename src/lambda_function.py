@@ -141,10 +141,11 @@ def verify_jwt_token(jwt_token):
             logger.warning("JWT token not yet valid (nbf claim)")
             return False
         
-        # Validate issuer
-        expected_issuer = f"https://cognito-idp.us-east-1.amazonaws.com/{COGNITO_USER_POOL_ID}"
+        # Validate issuer (extract region from User Pool ID)
+        region = extract_region_from_user_pool_id(COGNITO_USER_POOL_ID)
+        expected_issuer = f"https://cognito-idp.{region}.amazonaws.com/{COGNITO_USER_POOL_ID}"
         if payload.get('iss') != expected_issuer:
-            logger.warning(f"Invalid issuer: {payload.get('iss')}")
+            logger.warning(f"Invalid issuer: {payload.get('iss')}. Expected: {expected_issuer}")
             return False
         
         # Validate audience (ID token) or client_id (access token)
@@ -183,6 +184,20 @@ def verify_jwt_token(jwt_token):
     except Exception as e:
         logger.error(f"JWT verification error: {e}")
         return False
+
+def extract_region_from_user_pool_id(user_pool_id):
+    """Extract AWS region from Cognito User Pool ID format: region_poolid"""
+    try:
+        if '_' in user_pool_id:
+            region = user_pool_id.split('_')[0]
+            logger.debug(f"Extracted region '{region}' from User Pool ID '{user_pool_id}'")
+            return region
+        else:
+            logger.warning(f"Invalid User Pool ID format: {user_pool_id}. Using default region us-east-1")
+            return 'us-east-1'
+    except Exception as e:
+        logger.error(f"Error extracting region from User Pool ID: {e}")
+        return 'us-east-1'
 
 def parse_jwt_token(jwt_token):
     """Parse JWT token into header, payload, and signature"""
@@ -261,8 +276,9 @@ def get_jwks_key(kid):
 def fetch_jwks_keys():
     """Fetch JWKS keys from Cognito and cache them"""
     try:
-        # Construct JWKS URL
-        jwks_url = f"https://cognito-idp.us-east-1.amazonaws.com/{COGNITO_USER_POOL_ID}/.well-known/jwks.json"
+        # Construct JWKS URL (extract region from User Pool ID)
+        region = extract_region_from_user_pool_id(COGNITO_USER_POOL_ID)
+        jwks_url = f"https://cognito-idp.{region}.amazonaws.com/{COGNITO_USER_POOL_ID}/.well-known/jwks.json"
         
         # Fetch JWKS
         with urllib.request.urlopen(jwks_url, timeout=10) as response:

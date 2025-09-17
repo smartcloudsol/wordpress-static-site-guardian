@@ -219,13 +219,6 @@ def test_lambda_edge_configuration():
             print("❌ Lambda@Edge function incorrectly has Environment variables")
             return False
         
-        # Check function name indicates Edge deployment
-        if 'cookie-signing-edge' in template_content:
-            print("✅ Function name indicates Lambda@Edge deployment")
-        else:
-            print("❌ Function name doesn't indicate Lambda@Edge deployment")
-            return False
-        
         # Check CloudFront distribution has /issue-cookie cache behavior
         if "PathPattern: '/issue-cookie*'" in template_content:
             print("✅ CloudFront distribution has /issue-cookie* cache behavior")
