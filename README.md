@@ -41,7 +41,7 @@ Generate RSA key pairs using our provided script:
 curl -O https://raw.githubusercontent.com/smartcloudsol/wordpress-static-site-guardian/refs/heads/main/scripts/generate-cloudfront-keypair.sh
 chmod +x generate-cloudfront-keypair.sh
 
-# Generate keys and store in AWS
+# Generate keys and store in AWS (choose your preferred region)
 ./generate-cloudfront-keypair.sh --name my-wordpress-keys --region us-east-1
 ```
 
@@ -50,19 +50,32 @@ This creates:
 - **Public Key Content**: Required for the `PublicKeyContent` parameter
 - **Private Key**: Securely stored in SSM Parameter Store
 
+> **📍 Remember Your Region**: Note the region where you generate these keys - you MUST deploy the SAR application in the same region!
+
 ### 3. Domain Configuration
 - Domain registered and DNS accessible
 - Cognito User Pool configured for JWT authentication
 
 ## 📦 Deployment Options
 
+> **⚠️ IMPORTANT REGION REQUIREMENT**
+> 
+> **The SAR application MUST be deployed in the same AWS region where you generated your KMS key and SSM parameters.** 
+> 
+> During deployment, the CloudFrontResourceManager Lambda function needs to access:
+> - **KMS Key**: To decrypt the CloudFront private key
+> - **SSM Parameter**: To retrieve the private key for embedding in the Lambda@Edge function
+> 
+> If you generated your keys in `us-east-1`, deploy the SAR in `us-east-1`. If you used `eu-west-1`, deploy in `eu-west-1`, etc.
+
 ### Option 1: Deploy from AWS Serverless Application Repository (Recommended)
 The easiest way to deploy WordPress Static Site Guardian is directly from the AWS Serverless Application Repository:
 
 1. **Browse to SAR**: Visit the [AWS Serverless Application Repository](https://serverlessrepo.aws.amazon.com/applications)
-2. **Search**: Look for "WordPress Static Site Guardian"
-3. **Deploy**: Click "Deploy" and fill in the required parameters
-4. **Complete Setup**: Follow the post-deployment instructions
+2. **Select Region**: **Ensure you're in the same region as your KMS key and SSM parameters**
+3. **Search**: Look for "WordPress Static Site Guardian"
+4. **Deploy**: Click "Deploy" and fill in the required parameters
+5. **Complete Setup**: Follow the post-deployment instructions
 
 **Note**: The SAR version uses custom Lambda resources to manage CloudFront components (Public Keys, Key Groups, Origin Access Control, and Functions) that are not natively supported by SAR. This approach maintains full functionality while ensuring compatibility with the AWS Serverless Application Repository.
 
@@ -70,6 +83,9 @@ The easiest way to deploy WordPress Static Site Guardian is directly from the AW
 Use our automated deployment script for SAR applications:
 
 ```bash
+# Ensure you're in the same region as your KMS key and SSM parameters
+export AWS_DEFAULT_REGION=us-east-1  # Change to your key generation region
+
 ./scripts/deploy-from-sar.sh \
   --stack-name my-wordpress-protection \
   --domain example.com \
@@ -79,6 +95,12 @@ Use our automated deployment script for SAR applications:
   --cognito-user-pool-id us-east-1_abcdefghi \
   --cognito-app-client-ids "client1,client2" \
   --enable-logging
+```
+
+**Region Verification**: Before running the script, verify you're in the correct region:
+```bash
+aws configure get region
+# Should match the region where you generated your KMS key
 ```
 
 ## 🚀 Deployment Parameters
@@ -180,19 +202,28 @@ curl -H "Authorization: Bearer YOUR_JWT_TOKEN" \
 
 ### Common Issues
 
-1. **403 Forbidden on Protected Paths**
+1. **Deployment Fails with "AccessDenied" or "ResourceNotFound"**
+   - **Most Common Cause**: SAR deployed in wrong region
+   - **Solution**: Ensure you're deploying in the same region as your KMS key and SSM parameters
+   - **Check**: Run `aws ssm get-parameter --name "/cloudfront/private-key/YOUR-KMS-KEY-ID"` to verify region
+
+2. **403 Forbidden on Protected Paths**
    - Check CloudFront signed cookies are present
    - Verify cookie domain matches your domain
    - Ensure key group configuration is correct
 
-2. **Cookies Not Being Set**
+3. **Cookies Not Being Set**
    - Verify JWT Bearer token is valid and properly formatted
    - Check Lambda@Edge function response headers in CloudWatch logs
    - Confirm host-only cookies are being set (no Domain attribute)
 
-3. **Certificate Issues**
+4. **Certificate Issues**
    - Ensure certificate is in us-east-1 region
    - Verify certificate covers all required domains
+
+5. **"Invalid issuer" JWT Errors**
+   - Verify Cognito User Pool ID format matches region (e.g., `us-west-1_abcdefghi`)
+   - Check that CognitoAppClientIds parameter matches your actual client IDs
 
 ## 💰 Cost Estimation
 

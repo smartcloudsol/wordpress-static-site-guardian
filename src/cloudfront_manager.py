@@ -245,6 +245,8 @@ def create_resource(event, resource_type):
         return update_distribution(props)
     elif resource_type == 'ResponsePolicy':
         return create_response_policy(props)
+    elif resource_type == 'LambdaCodeUpdate':
+        return update_lambda_code(props)
     elif resource_type == 'Test':
         return {
             'Status': 'TestSuccess', 
@@ -1106,6 +1108,8 @@ def update_resource(event, resource_type):
     elif resource_type == 'ResponsePolicy':
         # Response policies can be updated in place
         return update_response_policy(event['ResourceProperties'], event.get('PhysicalResourceId'))
+    elif resource_type == 'LambdaCodeUpdate':
+        return update_lambda_code(event['ResourceProperties'])
     else:
         # For other resources, recreate them
         try:
@@ -1486,3 +1490,196 @@ def send_response(event, context, response_status, response_data):
         except Exception as final_error:
             logger.error(f"Final response attempt also failed: {final_error}")
             # At this point, CloudFormation will timeout, but we've logged everything
+
+def update_lambda_code(props):
+    """Update Lambda function code with CloudFormation parameter values"""
+    try:
+        import zipfile
+        import io
+        import gc
+        
+        # Initialize Lambda client
+        lambda_client = boto3.client('lambda')
+        
+        function_name = props['FunctionName']
+        
+        logger.info(f"Updating Lambda function code for: {function_name}")
+        
+        # Get current function code
+        response = lambda_client.get_function(FunctionName=function_name)
+        code_location = response['Code']['Location']
+        
+        # Download current code with memory optimization
+        import urllib.request
+        logger.info("Downloading current function code...")
+        with urllib.request.urlopen(code_location) as response:
+            zip_data = response.read()
+        
+        logger.info(f"Downloaded {len(zip_data)} bytes of function code")
+        
+        # Extract and modify lambda_function.py with memory management
+        code_content = None
+        with zipfile.ZipFile(io.BytesIO(zip_data), 'r') as zip_ref:
+            # Read the current lambda_function.py
+            with zip_ref.open('lambda_function.py') as f:
+                code_content = f.read().decode('utf-8')
+        
+        if not code_content:
+            raise ValueError("Could not read lambda_function.py from zip file")
+        
+        # Retrieve private key from SSM Parameter Store
+        ssm_client = boto3.client('ssm')
+        kms_key_id = props['KmsKeyId']
+        parameter_name = f"/cloudfront/private-key/{kms_key_id}"
+        
+        try:
+            response = ssm_client.get_parameter(
+                Name=parameter_name,
+                WithDecryption=True
+            )
+            private_key_pem = response['Parameter']['Value']
+            logger.info("Successfully retrieved private key from SSM for embedding")
+        except Exception as e:
+            logger.error(f"Error retrieving private key from SSM: {e}")
+            raise ValueError(f"Could not retrieve private key from SSM parameter {parameter_name}")
+        
+        # Replace placeholder values with actual CloudFormation parameters
+        replacements = {
+            "DOMAIN_NAME = 'example.com'": f"DOMAIN_NAME = '{props['DomainName']}'",
+            "KEY_PAIR_ID = 'ABCDEFGHIJKLMNOPQR'": f"KEY_PAIR_ID = '{props['KeyPairId']}'",
+            "COOKIE_EXPIRATION_DAYS = 30": f"COOKIE_EXPIRATION_DAYS = {props['CookieExpirationDays']}",
+            "PROTECTED_PATHS = '/dashboard,/members,/profile'": f"PROTECTED_PATHS = '{props['ProtectedPaths']}'",
+            "KMS_KEY_ID = '12345678-1234-1234-1234-123456789012'": f"KMS_KEY_ID = '{props['KmsKeyId']}'",
+            "COGNITO_USER_POOL_ID = 'us-east-1_abcdefghi'": f"COGNITO_USER_POOL_ID = '{props['CognitoUserPoolId']}'",
+            "COGNITO_APP_CLIENT_IDS = 'client1,client2'": f"COGNITO_APP_CLIENT_IDS = '{props['CognitoAppClientIds']}'",
+            "PLACEHOLDER_PRIVATE_KEY_CONTENT": private_key_pem.replace('-----BEGIN RSA PRIVATE KEY-----\n', '').replace('\n-----END RSA PRIVATE KEY-----', '').replace('\n', '\\n')
+        }
+        
+        # Apply replacements
+        updated_code = code_content
+        for old_value, new_value in replacements.items():
+            if old_value in updated_code:
+                updated_code = updated_code.replace(old_value, new_value)
+                logger.info(f"Replaced: {old_value[:50]}...")
+        
+        logger.info("Applied configuration replacements to Lambda function code")
+        
+        # Force garbage collection to free memory
+        del code_content
+        gc.collect()
+        
+        # Create new zip with updated code - memory optimized
+        new_zip_buffer = io.BytesIO()
+        
+        try:
+            with zipfile.ZipFile(new_zip_buffer, 'w', zipfile.ZIP_DEFLATED, compresslevel=1) as new_zip:
+                # Copy all files except lambda_function.py
+                with zipfile.ZipFile(io.BytesIO(zip_data), 'r') as old_zip:
+                    for item in old_zip.infolist():
+                        if item.filename != 'lambda_function.py':
+                            # Read and write file data in chunks to save memory
+                            with old_zip.open(item.filename) as src:
+                                new_zip.writestr(item, src.read())
+                
+                # Add updated lambda_function.py
+                new_zip.writestr('lambda_function.py', updated_code.encode('utf-8'))
+            
+            # Force garbage collection before upload
+            del updated_code
+            del zip_data
+            gc.collect()
+            
+            # Update function code
+            new_zip_buffer.seek(0)
+            zip_content = new_zip_buffer.getvalue()
+            
+            logger.info(f"Uploading {len(zip_content)} bytes of updated function code...")
+            
+            lambda_client.update_function_code(
+                FunctionName=function_name,
+                ZipFile=zip_content
+            )
+            
+            logger.info(f"Successfully updated Lambda function code for: {function_name}")
+            
+            # Wait for function to be in Active state before publishing version
+            logger.info("Waiting for Lambda function to be in Active state...")
+            max_wait_time = 300  # 5 minutes
+            wait_interval = 5    # 5 seconds
+            elapsed_time = 0
+            
+            while elapsed_time < max_wait_time:
+                try:
+                    response = lambda_client.get_function(FunctionName=function_name)
+                    state = response['Configuration']['State']
+                    last_update_status = response['Configuration']['LastUpdateStatus']
+                    
+                    logger.info(f"Function state: {state}, LastUpdateStatus: {last_update_status}")
+                    
+                    if state == 'Active' and last_update_status == 'Successful':
+                        logger.info("Function is ready for version publishing")
+                        break
+                    elif last_update_status == 'Failed':
+                        raise Exception(f"Function update failed: {response['Configuration'].get('LastUpdateStatusReason', 'Unknown error')}")
+                    
+                    time.sleep(wait_interval)
+                    elapsed_time += wait_interval
+                    
+                except Exception as e:
+                    if 'ResourceConflictException' in str(e):
+                        logger.info("Function still updating, continuing to wait...")
+                        time.sleep(wait_interval)
+                        elapsed_time += wait_interval
+                    else:
+                        raise
+            
+            if elapsed_time >= max_wait_time:
+                raise Exception(f"Timeout waiting for function {function_name} to be ready")
+            
+            # Publish a new version for Lambda@Edge
+            logger.info("Publishing new Lambda function version...")
+            version_response = lambda_client.publish_version(
+                FunctionName=function_name,
+                Description=f'Updated with CloudFormation parameters at {int(time.time())}'
+            )
+            
+            version_arn = version_response['FunctionArn']
+            logger.info(f"Published Lambda@Edge version: {version_arn}")
+            
+            # Create or update alias to point to new version
+            try:
+                lambda_client.create_alias(
+                    FunctionName=function_name,
+                    Name='live',
+                    FunctionVersion=version_response['Version'],
+                    Description='Live alias for Lambda@Edge'
+                )
+                logger.info("Created 'live' alias for Lambda@Edge")
+            except lambda_client.exceptions.ResourceConflictException:
+                # Alias already exists, update it
+                lambda_client.update_alias(
+                    FunctionName=function_name,
+                    Name='live',
+                    FunctionVersion=version_response['Version'],
+                    Description='Live alias for Lambda@Edge'
+                )
+                logger.info("Updated 'live' alias for Lambda@Edge")
+            
+            return {
+                'PhysicalResourceId': f"lambda-code-update-{function_name}",
+                'VersionArn': version_arn,
+                'Version': version_response['Version'],
+                'FunctionName': function_name,
+                'UpdatedAt': str(int(time.time()))
+            }
+            
+        finally:
+            # Clean up memory
+            new_zip_buffer.close()
+        
+    except Exception as e:
+        logger.error(f"Error updating Lambda function code: {e}")
+        # Force garbage collection on error
+        import gc
+        gc.collect()
+        raise

@@ -40,6 +40,11 @@ KMS_KEY_ID = '12345678-1234-1234-1234-123456789012'  # Replace with actual KMS k
 COGNITO_USER_POOL_ID = 'us-east-1_abcdefghi'  # Replace with actual User Pool ID
 COGNITO_APP_CLIENT_IDS = 'client1,client2'  # Replace with actual App Client IDs
 
+# Embedded private key (replaces SSM Parameter Store for Lambda@Edge)
+EMBEDDED_PRIVATE_KEY = '''-----BEGIN RSA PRIVATE KEY-----
+PLACEHOLDER_PRIVATE_KEY_CONTENT
+-----END RSA PRIVATE KEY-----'''
+
 def lambda_handler(event, context):
     """
     Lambda@Edge function to issue CloudFront signed cookies
@@ -243,9 +248,11 @@ def verify_jwt_signature(jwt_token, header, payload):
         signature = base64.urlsafe_b64decode(parts[2] + '=' * (4 - len(parts[2]) % 4))
         
         try:
+            from cryptography.hazmat.primitives.asymmetric import padding
             public_key.verify(
                 signature,
                 message,
+                padding.PKCS1v15(),
                 hashes.SHA256()
             )
             return True
@@ -428,27 +435,18 @@ def get_status_description(status_code):
     return status_descriptions.get(status_code, 'Unknown')
 
 def get_private_key_from_ssm():
-    """Retrieve private key from SSM Parameter Store"""
+    """Retrieve private key from embedded configuration (Lambda@Edge compatible)"""
     try:
-        kms_key_id = KMS_KEY_ID
-        parameter_name = f"/cloudfront/private-key/{kms_key_id}"
-        
-        try:
-            # Get the encrypted private key from Parameter Store
-            response = ssm_client.get_parameter(
-                Name=parameter_name,
-                WithDecryption=True
-            )
-            private_key_pem = response['Parameter']['Value']
-            logger.info("Successfully retrieved private key from SSM")
-            return private_key_pem
-            
-        except ssm_client.exceptions.ParameterNotFound:
-            logger.warning(f"Private key parameter not found: {parameter_name}")
+        # For Lambda@Edge, use embedded private key instead of SSM
+        if EMBEDDED_PRIVATE_KEY and 'PLACEHOLDER_PRIVATE_KEY_CONTENT' not in EMBEDDED_PRIVATE_KEY:
+            logger.info("Using embedded private key for Lambda@Edge")
+            return EMBEDDED_PRIVATE_KEY
+        else:
+            logger.error("Embedded private key not configured or contains placeholder")
             return None
             
     except Exception as e:
-        logger.error(f"Error retrieving private key: {str(e)}")
+        logger.error(f"Error retrieving embedded private key: {str(e)}")
         return None
 
 def create_signed_cookies():

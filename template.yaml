@@ -12,7 +12,7 @@ Metadata:
     ReadmeUrl: README.md
     Labels: ['wordpress', 'cloudfront', 'static-site', 'authentication', 'security', 'signed-cookies']
     HomePageUrl: https://kirodev.wpsuite.io
-    SemanticVersion: 1.1.7
+    SemanticVersion: 1.1.18
     SourceCodeUrl: https://github.com/smartcloudsol/wordpress-static-site-guardian
 
 Parameters:
@@ -159,6 +159,7 @@ Resources:
       Handler: cloudfront_manager.lambda_handler
       Description: 'Manages CloudFront resources not supported by SAR'
       Timeout: 900
+      MemorySize: 512
       Environment:
         Variables:
           STACK_NAME: !Ref AWS::StackName
@@ -204,6 +205,16 @@ Resources:
                 - cloudfront:GetDistributionConfig
                 - route53:ListHostedZones
                 - route53:GetHostedZone
+                - lambda:GetFunction
+                - lambda:UpdateFunctionCode
+                - lambda:PublishVersion
+                - lambda:CreateAlias
+                - lambda:UpdateAlias
+                - lambda:GetAlias
+                - ssm:GetParameter
+                - ssm:GetParameters
+                - kms:Decrypt
+                - kms:DescribeKey
               Resource: '*'
 
   # Custom Resource for CloudFront Public Key
@@ -276,6 +287,7 @@ Resources:
   # CloudFront Distribution (using standard CloudFormation)
   CloudFrontDistribution:
     Type: AWS::CloudFront::Distribution
+    DependsOn: LambdaCodeUpdater
     Properties:
       DistributionConfig:
         Aliases:
@@ -309,7 +321,7 @@ Resources:
             Compress: false
             LambdaFunctionAssociations:
               - EventType: viewer-request
-                LambdaFunctionARN: !Ref CookieSigningFunction.Version
+                LambdaFunctionARN: !GetAtt LambdaCodeUpdater.VersionArn
           - PathPattern: '/restricted*'
             TargetOriginId: S3Origin
             ViewerProtocolPolicy: redirect-to-https
@@ -363,6 +375,9 @@ Resources:
   # S3 Bucket Policy to allow CloudFront access
   StaticSiteBucketPolicy:
     Type: AWS::S3::BucketPolicy
+    DependsOn: 
+      - StaticSiteBucket
+      - CloudFrontDistribution
     Properties:
       Bucket: !Ref StaticSiteBucket
       PolicyDocument:
@@ -424,16 +439,7 @@ Resources:
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
-              - Effect: Allow
-                Action:
-                  - kms:Decrypt
-                  - kms:DescribeKey
-                Resource: !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/${KmsKeyId}'
-              - Effect: Allow
-                Action:
-                  - ssm:GetParameter
-                  - ssm:GetParameters
-                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cloudfront/private-key/*'
+
               - Effect: Allow
                 Action:
                   - logs:CreateLogGroup
@@ -453,8 +459,24 @@ Resources:
       Description: 'Lambda@Edge function for issuing CloudFront signed cookies with JWT authentication'
       # Lambda@Edge functions cannot use environment variables
       # Configuration is embedded in the function code during deployment
-      AutoPublishAlias: live
+      # Note: AutoPublishAlias removed - version will be created after code update
       Role: !GetAtt LambdaEdgeExecutionRole.Arn
+
+  # Custom Resource for Lambda Function Code Update
+  LambdaCodeUpdater:
+    Type: AWS::CloudFormation::CustomResource
+    DependsOn: CookieSigningFunction
+    Properties:
+      ServiceToken: !GetAtt CloudFrontResourceManager.Arn
+      ResourceType: 'LambdaCodeUpdate'
+      FunctionName: !Sub '${AWS::StackName}-cookie-signing'
+      DomainName: !Ref DomainName
+      KeyPairId: !GetAtt CloudFrontPublicKey.PublicKeyId
+      CookieExpirationDays: !Ref CookieExpirationDays
+      ProtectedPaths: !Join [',', !Ref ProtectedPaths]
+      KmsKeyId: !Ref KmsKeyId
+      CognitoUserPoolId: !Ref CognitoUserPoolId
+      CognitoAppClientIds: !Join [',', !Ref CognitoAppClientIds]
 
   # Route53 Hosted Zone Lookup
   HostedZoneLookup:
@@ -576,7 +598,7 @@ Outputs:
 
   LambdaEdgeFunctionArn:
     Description: 'Lambda@Edge Function ARN for cookie signing with JWT authentication'
-    Value: !Ref CookieSigningFunction.Version
+    Value: !GetAtt LambdaCodeUpdater.VersionArn
     Export:
       Name: !Sub '${AWS::StackName}-LambdaEdgeArn'
 
