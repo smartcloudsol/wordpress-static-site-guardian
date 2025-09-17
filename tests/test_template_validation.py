@@ -246,41 +246,6 @@ def test_lambda_edge_configuration():
         print(f"❌ Error testing Lambda@Edge configuration: {e}")
         return False
 
-def test_removed_api_gateway_components():
-    """Test that API Gateway components have been removed"""
-    print("🧪 Testing API Gateway component removal...")
-    
-    try:
-        # Load template
-        with open('template.yaml', 'r') as f:
-            template_content = f.read()
-        
-        # Check for API Gateway references that should be removed
-        api_gateway_components = [
-            'ApiDomainName',
-            'ApiGatewayDomainName',
-            'ServerlessRestApi',
-            'ApiGatewayDeployment',
-            'ApiGatewayGetMethod',
-            'ApiGatewayOptionsMethod',
-            'ApiGatewayResource',
-            'ApiGatewayBasePathMapping',
-            'LambdaApiGatewayPermission'
-        ]
-        
-        for component in api_gateway_components:
-            if component in template_content:
-                print(f"❌ API Gateway component still present: {component}")
-                return False
-            else:
-                print(f"✅ API Gateway component removed: {component}")
-        
-        return True
-        
-    except Exception as e:
-        print(f"❌ Error testing API Gateway removal: {e}")
-        return False
-
 def run_template_validation_tests():
     """Run all template validation tests"""
     print("🧪 Running Template Validation Tests...")
@@ -293,7 +258,6 @@ def run_template_validation_tests():
         ("Parameter Validation Logic", test_parameter_validation_logic),
         ("Template Build", test_template_build),
         ("Lambda@Edge Configuration", test_lambda_edge_configuration),
-        ("API Gateway Component Removal", test_removed_api_gateway_components)
     ]
     
     passed = 0

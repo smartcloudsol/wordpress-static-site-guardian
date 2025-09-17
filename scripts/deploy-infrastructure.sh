@@ -14,7 +14,6 @@ NC='\033[0m' # No Color
 # Default values
 STACK_NAME=""
 DOMAIN_NAME=""
-API_DOMAIN_NAME=""
 CERTIFICATE_ARN=""
 PROTECTED_PATHS="/dashboard,/profile,/admin"
 S3_WWWROOT_PREFIX="wwwroot"
@@ -47,7 +46,6 @@ Deploy WordPress Protection Infrastructure
 OPTIONS:
     -s, --stack-name STACK_NAME          CloudFormation stack name (required)
     -d, --domain DOMAIN                  Main domain for CloudFront (required)
-    -a, --api-domain API_DOMAIN          API Gateway domain (required)
     -c, --certificate-arn ARN            ACM certificate ARN in us-east-1 (required)
     -k, --kms-key-id KEY_ID              KMS Key ID containing encrypted private key (required)
     -u, --public-key-content CONTENT     Base64 public key content (required)
@@ -59,8 +57,8 @@ OPTIONS:
     -h, --help                           Show this help message
 
 EXAMPLES:
-    $0 -s my-wordpress-stack -d example.com -a api.example.com -c arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012 -k 12345678-1234-1234-1234-123456789012 -u "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA..."
-    $0 -s my-stack -d site.com -a api.site.com -c arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012 -k 12345678-1234-1234-1234-123456789012 -u "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA..." -p "/admin,/dashboard" -i "/login" -t 7
+    $0 -s my-wordpress-stack -d example.com -c arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012 -k 12345678-1234-1234-1234-123456789012 -u "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA..."
+    $0 -s my-stack -d site.com -c arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012 -k 12345678-1234-1234-1234-123456789012 -u "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA..." -p "/admin,/dashboard" -i "/login" -t 7
 
 PREREQUISITES:
     1. AWS CLI configured with appropriate permissions
@@ -80,10 +78,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         -d|--domain)
             DOMAIN_NAME="$2"
-            shift 2
-            ;;
-        -a|--api-domain)
-            API_DOMAIN_NAME="$2"
             shift 2
             ;;
         -c|--certificate-arn)
@@ -131,7 +125,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Validate required parameters
-if [[ -z "$STACK_NAME" || -z "$DOMAIN_NAME" || -z "$API_DOMAIN_NAME" || -z "$CERTIFICATE_ARN" || -z "$KMS_KEY_ID" || -z "$PUBLIC_KEY_CONTENT" ]]; then
+if [[ -z "$STACK_NAME" || -z "$DOMAIN_NAME" || -z "$CERTIFICATE_ARN" || -z "$KMS_KEY_ID" || -z "$PUBLIC_KEY_CONTENT" ]]; then
     print_error "Missing required parameters"
     show_usage
     exit 1
@@ -155,15 +149,9 @@ if [[ ${#PUBLIC_KEY_CONTENT} -lt 100 ]]; then
     exit 1
 fi
 
-# Validate API domain is subdomain of main domain
-if [[ "$API_DOMAIN_NAME" != *"$DOMAIN_NAME" ]]; then
-    print_warning "API domain should be a subdomain of the main domain"
-fi
-
 print_status "Starting deployment with the following configuration:"
 echo "  Stack Name: $STACK_NAME"
 echo "  Domain: $DOMAIN_NAME"
-echo "  API Domain: $API_DOMAIN_NAME"
 echo "  Certificate ARN: $CERTIFICATE_ARN"
 echo "  KMS Key ID: $KMS_KEY_ID"
 echo "  Public Key Length: ${#PUBLIC_KEY_CONTENT} characters"
@@ -208,7 +196,6 @@ aws cloudformation deploy \
         ProtectedPaths="$PROTECTED_PATHS" \
         CognitoRefreshTokenValidity="$COGNITO_REFRESH_TOKEN_VALIDITY" \
         DomainName="$DOMAIN_NAME" \
-        ApiDomainName="$API_DOMAIN_NAME" \
         CertificateArn="$CERTIFICATE_ARN" \
         KmsKeyId="$KMS_KEY_ID" \
         PublicKeyContent="$PUBLIC_KEY_CONTENT" \
@@ -224,17 +211,15 @@ if [[ $? -eq 0 ]]; then
     
     S3_BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query "Stacks[0].Outputs[?OutputKey=='S3BucketName'].OutputValue" --output text)
     CLOUDFRONT_DOMAIN=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionDomain'].OutputValue" --output text)
-    API_GATEWAY_URL=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --region "$REGION" --query "Stacks[0].Outputs[?OutputKey=='ApiGatewayInvokeUrl'].OutputValue" --output text)
     
     echo
     print_status "Deployment Summary:"
     echo "  S3 Bucket: $S3_BUCKET_NAME"
     echo "  CloudFront Domain: $CLOUDFRONT_DOMAIN"
-    echo "  API Gateway URL: $API_GATEWAY_URL"
     echo
     
     print_warning "IMPORTANT: Manual steps required to complete setup:"
-    echo "1. Configure DNS records to point your domains to CloudFront and API Gateway"
+    echo "1. Configure DNS records to point your domains to CloudFront"
     echo "2. Upload your static WordPress files to the S3 bucket: $S3_BUCKET_NAME/$S3_WWWROOT_PREFIX"
     echo "3. Test the cookie issuance endpoint with proper IAM authentication"
     echo "4. Verify that protected paths are properly secured"

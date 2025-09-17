@@ -31,7 +31,7 @@ Before deploying this application, ensure you have:
 ### 1. SSL Certificate
 - Valid SSL certificate in AWS Certificate Manager (ACM)
 - **Must be in us-east-1 region** (required for CloudFront)
-- Certificate must cover your domain and API subdomain
+- Certificate must cover your domain
 
 ### 2. CloudFront Key Pair
 Generate RSA key pairs using our provided script:

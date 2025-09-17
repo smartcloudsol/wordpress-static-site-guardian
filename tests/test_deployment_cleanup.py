@@ -90,7 +90,6 @@ class DeploymentCleanupValidator:
                 'name': 'Minimal required parameters',
                 'params': {
                     'DomainName': 'example.com',
-                    'ApiDomainName': 'api.example.com',
                     'CertificateArn': 'arn:aws:acm:us-east-1:123456789012:certificate/12345678-1234-1234-1234-123456789012',
                     'PublicKeyContent': 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1234567890',
                     'KmsKeyId': '12345678-1234-1234-1234-123456789012'
@@ -100,7 +99,6 @@ class DeploymentCleanupValidator:
                 'name': 'All parameters with custom values',
                 'params': {
                     'DomainName': 'mysite.com',
-                    'ApiDomainName': 'auth.mysite.com',
                     'CertificateArn': 'arn:aws:acm:us-east-1:123456789012:certificate/87654321-4321-4321-4321-210987654321',
                     'PublicKeyContent': 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0987654321',
                     'KmsKeyId': '87654321-4321-4321-4321-210987654321',
@@ -167,9 +165,6 @@ class DeploymentCleanupValidator:
                 'NoCachePolicy'
             ],
             'CookieSigningFunction': ['CryptographyLayer'],
-            'ApiGatewayDomainName': [],
-            'ServerlessRestApi': [],
-            'ApiGatewayDeployment': ['ApiGatewayGetMethod', 'ApiGatewayOptionsMethod']
         }
         
         # Check that dependencies make sense
@@ -211,13 +206,6 @@ class DeploymentCleanupValidator:
         # Test deletion order (reverse of creation order)
         deletion_order = [
             'CloudFrontDistributionUpdate',  # Should be deleted first
-            'ApiGatewayDeployment',
-            'ApiGatewayGetMethod',
-            'ApiGatewayOptionsMethod',
-            'ApiGatewayResource',
-            'ApiGatewayBasePathMapping',
-            'ApiGatewayDomainName',
-            'ServerlessRestApi',
             'CookieSigningFunction',
             'CloudFrontDistribution',
             'PathRewriteFunction',
@@ -367,7 +355,7 @@ class DeploymentCleanupValidator:
             },
             {
                 'name': 'Domain name changes',
-                'changes': ['DomainName', 'ApiDomainName'],
+                'changes': ['DomainName'],
                 'requires_replacement': True
             }
         ]
@@ -520,8 +508,6 @@ class DeploymentCleanupValidator:
             'AWS::S3::Bucket',
             'AWS::CloudFront::Distribution',
             'AWS::Lambda::Function',
-            'AWS::ApiGateway::RestApi',
-            'AWS::ApiGateway::DomainName',
             'AWS::Route53::RecordSet',
             'AWS::CloudWatch::Dashboard'
         ]

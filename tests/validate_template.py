@@ -136,7 +136,6 @@ class TemplateValidator:
         # Required parameters for WordPress Static Site Guardian
         required_params = {
             'DomainName': 'Main domain for CloudFront distribution',
-            'ApiDomainName': 'API Gateway domain',
             'CertificateArn': 'SSL certificate ARN',
             'PublicKeyContent': 'RSA public key content',
             'KmsKeyId': 'KMS key for private key encryption'
@@ -158,7 +157,7 @@ class TemplateValidator:
                     self.log_warning(f"Parameter {param_name} missing Description")
                 
                 # Check for validation patterns on critical parameters
-                if param_name in ['DomainName', 'ApiDomainName', 'CertificateArn']:
+                if param_name in ['DomainName', 'CertificateArn']:
                     if 'AllowedPattern' not in param:
                         self.log_warning(f"Parameter {param_name} missing validation pattern")
                     else:
@@ -352,7 +351,6 @@ class TemplateValidator:
         critical_outputs = [
             'S3BucketName',
             'CloudFrontDistributionId',
-            'ApiGatewayInvokeUrl'
         ]
         
         for output_name in critical_outputs:

@@ -200,7 +200,7 @@ echo
 print_status "Validating template parameters..."
 
 print_check "Required parameters presence"
-REQUIRED_PARAMS=("DomainName" "ApiDomainName" "CertificateArn" "PublicKeyContent" "KmsKeyId")
+REQUIRED_PARAMS=("DomainName" "CertificateArn" "PublicKeyContent" "KmsKeyId")
 TEMPLATE_CONTENT=$(cat "$TEMPLATE_FILE")
 
 for param in "${REQUIRED_PARAMS[@]}"; do
@@ -213,7 +213,7 @@ done
 
 print_check "Parameter constraints validation"
 # Check for AllowedPattern constraints on critical parameters
-PATTERN_PARAMS=("DomainName" "ApiDomainName" "CertificateArn")
+PATTERN_PARAMS=("DomainName" "CertificateArn")
 for param in "${PATTERN_PARAMS[@]}"; do
     if echo "$TEMPLATE_CONTENT" | grep -A 5 "^  $param:" | grep -q "AllowedPattern:"; then
         print_success "Parameter $param has validation pattern"
@@ -372,7 +372,7 @@ echo
 print_status "Validating template outputs..."
 
 print_check "Critical outputs presence"
-CRITICAL_OUTPUTS=("S3BucketName" "CloudFrontDistributionId" "ApiGatewayInvokeUrl")
+CRITICAL_OUTPUTS=("S3BucketName" "CloudFrontDistributionId")
 for output in "${CRITICAL_OUTPUTS[@]}"; do
     if echo "$TEMPLATE_CONTENT" | grep -q "^  $output:"; then
         print_success "Critical output found: $output"
